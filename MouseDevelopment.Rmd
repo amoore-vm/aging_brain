@@ -183,7 +183,7 @@ clustree(merge.obj_slm)
 Other analyses within our lab of mouse brains have used 6 clusters. This corresponds to 0.1. 
 
 Original issues: 
-1. Only 2 images viewable. I need to download the adult images. (resolved)
+1. Only 2 images viewable. I need to download the adult images. (Adult images downloaded but not successfully loading - still investigating)
 2. Poor resolution of spatialdimplots; spots too small - It took some time to resolve this. (resolved)
 3. Poor clustering. 
 
