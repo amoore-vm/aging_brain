@@ -157,18 +157,20 @@ UMAP_PCA <-DimPlot(merge_UMAP_PCA, group.by = "orig.ident")
 #This doesn't look good. There is a strong batch effect.
 
 #With Harmony
-merge.obj <- RunUMAP(merge.obj, dims = 1:10, reduction = "harmony")
+#merge.obj <- RunUMAP(merge.obj, dims = 1:10, reduction = "harmony")
 #plot - overlay all 4 controls on a single plot
-UMAP_harmony <- DimPlot(merge.obj, group.by = "orig.ident")
-#This looks better. Let's proceed to clustering. 
+#UMAP_harmony <- DimPlot(merge.obj, group.by = "orig.ident")
+#Let's try proceeding without Harmony
 
+merge.obj <- merge_UMAP_PCA
 
 
 ```
 ###Step 4b - Clustering - Clustree
 
 ```{r}
-merge.obj <- FindNeighbors(merge.obj, reduction = "harmony", dims = 1:10)
+#clustering with pca only, without harmony
+merge.obj <- FindNeighbors(merge.obj, reduction = "pca", dims = 1:10)
 merge.obj <- FindClusters(merge.obj, resolution = c(0.05, 0.075, 0.1, 0.15, 0.2, 0.25, 0.3), algorithm = 3)
 clustree(merge.obj)
 
@@ -176,23 +178,24 @@ clustree(merge.obj)
 #FindClusters algorithm default is Louvain
 #algorithm = 3 is SLM (smart local moving algorithm)
 
+#Let's skip SLM for now
 #SLM was used in the HF paper. Let's try that. 
-merge.obj_slm <- FindClusters(merge.obj, resolution = c(0.05, 0.075, 0.1, 0.15, 0.2, 0.25, 0.3), algorithm = 3)
-clustree(merge.obj_slm)
+#merge.obj_slm <- FindClusters(merge.obj, resolution = c(0.05, 0.075, 0.1, 0.15, 0.2, 0.25, 0.3), algorithm = 3)
+#clustree(merge.obj_slm)
 ```
 Other analyses within our lab of mouse brains have used 6 clusters. This corresponds to 0.1. 
 
 Original issues: 
-1. Only 2 images viewable. I need to download the adult images. (Adult images downloaded but not successfully loading - still investigating)
+1. Only 2 images viewable. I need to download the adult images. (resolved)
 2. Poor resolution of spatialdimplots; spots too small - It took some time to resolve this. (resolved)
 3. Poor clustering. 
 
 ```{r}
 #SpatialDimPlot of the SLM method
-slm_dim_0.1 <- SpatialDimPlot(merge.obj_slm, group.by = "Spatial_snn_res.0.1", ncol = 4,label = F, image.alpha = 1, alpha = 1, pt.size.factor = 740)
+#slm_dim_0.1 <- SpatialDimPlot(merge.obj, group.by = "Spatial_snn_res.0.1", ncol = 4,label = F, image.alpha = 1, alpha = 1, pt.size.factor = 740)
 
 #SpatialDimPlot of Louvian method
-louv_dim_0.1 <- SpatialDimPlot(merge.obj, group.by = "Spatial_snn_res.0.1", ncol = 2,label = F, image.alpha = 1, alpha = 1, pt.size.factor = 740)
+dim_0.1 <- SpatialDimPlot(merge.obj, group.by = "Spatial_snn_res.0.1", ncol = 4,label = F, image.alpha = 1, alpha = 1, pt.size.factor = 740)
 #ggsave("SpatialRes0.1.png")
 
 
