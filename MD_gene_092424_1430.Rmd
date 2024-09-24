@@ -1,0 +1,170 @@
+##Mouse Development and Aging 
+###File 2
+###Gene Expression Analysis
+
+
+```{r}
+library(Seurat)
+library(SeuratObject) 
+library(tidyverse)
+library(patchwork)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(clusterProfiler) #enrichGO
+
+setwd("C:/Users/Spouse/Documents/Research/Xie/MouseDevelopment")
+load("C:/Users/Spouse/Documents/Research/Xie/MouseDevelopment/MD_merge.obj.Rdata")
+#load merge.obj from MD_load_thru_cluster.Rmd
+
+```
+
+### Step 1 - Marker genes by sample
+Are certain marker genes more prominent in young samples compared with adult samples, or vice-versa? This is a form of quality control.
+
+
+```{r}
+color_palette <- c("mf_p21_rep1" = "red", "mf_p21_rep2" = "yellow", "adult_1" = "blue", "adult_2" = "green")
+#This ensures the samples are coded with the same colors consistently across our visualizations.
+
+sample_order <- c("mf_p21_rep1", "mf_p21_rep2", "adult_1", "adult_2")
+merge.obj$orig.ident <- factor(merge.obj$orig.ident, levels = sample_order)
+#This is the order the samples should display from left to right
+
+VlnPlot(merge.obj, features = c("Actb"), group.by = "orig.ident", pt.size = 0) + scale_fill_manual(values = color_palette) + guides(fill = FALSE) 
+#If we don't manually define the order, it orders from left to right in ascending order
+ggsave("./Figures/Genes_Violin/actb_4_samples.tiff", device='tiff', dpi=500, height = 5, width = 5, unit = 'in')
+#automatically saves the image
+
+VlnPlot(merge.obj, features = c("Top1"), group.by = "orig.ident", pt.size = 0) + scale_fill_manual(values = color_palette) + guides(fill = FALSE) 
+ggsave("./Figures/Genes_Violin/top1_4_samples.tiff", device='tiff', dpi=500, height = 5, width = 5, unit = 'in')
+
+VlnPlot(merge.obj, features = c("B2m"), group.by = "orig.ident", pt.size = 0) + scale_fill_manual(values = color_palette) + guides(fill = FALSE) 
+ggsave("./Figures/Genes_Violin/B2m_4_samples.tiff", device='tiff', dpi=500, height = 5, width = 5, unit = 'in')
+
+```
+### Step 2a - Marker Genes by Cluster - avg log2FC
+Our goal is to identify genes that are highly expressed in one cluster but poorly expressed in other clusters to serve as marker genes per cluster. This reinforces that each cluster represents distinct anatomical regions that in turn express distinct genes. 
+In our lab's FA Project, this was done by considering avg_log2FC. First, we generate a heat map; then we generate violin plots for each cluster using the gene with the highest avg_log2FC. However, that did not produce good results for this dataset. The top genes by avg_log2FC in Cluster 0 were also highly expressed in the other clusters. Thus, in Step 2b, we consider an alternative method for selecting marker genes by cluster.
+
+```{r}
+#Top 10 genes per cluster by average log2FC
+merge.obj.marker <- FindAllMarkers(merge.obj, only.pos = TRUE, min.pct = 0.5, logfc.threshold = 0.25)
+
+merge.obj.marker %>%
+    group_by(cluster) %>%
+    top_n(n = 10, wt = avg_log2FC) -> top10
+
+top10 <- top10[c(1:30,51:60,31:50),]
+
+DoHeatmap(merge.obj, features = top10$gene, group.by = "seurat_clusters") +
+  theme(text = element_text(size = 10)) +
+  scale_fill_gradientn(colors = c("blue", "white", "red"))# + theme(axis.text.y = element_blank())
+ggsave("./Figures/Genes_Violin/Heatmap_top10.tiff", device='tiff', dpi=500, height = 5, width = 5, unit = 'in')
+#This is a bit crowded, so let's select fewer genes (more signal, less noise)
+
+#Top 3 genes per cluster by average log2FC
+merge.obj.marker %>%
+    group_by(cluster) %>%
+    top_n(n = 3, wt = avg_log2FC) -> top3
+
+top3 <- top3[c(1:9,16:18,10:15),]
+
+DoHeatmap(merge.obj, features = top3$gene,group.by = "seurat_clusters")+
+  theme(text = element_text(size = 14)) + 
+  theme(axis.title.x = element_text(size = 8)) + #not axis text, not axis title, not plot title, not legend text, tried using a single theme() and two themes() - same result
+  scale_fill_gradientn(colors = c("blue", "white", "red"))
+ggsave("./Figures/Genes_Violin/Heatmap_top3.tiff", device='tiff', dpi=500, height = 5, width = 5, unit = 'in')
+
+#Let's examine the genes with the highest average log2FC by cluster. Are they expressed primarily in that cluster?
+VlnPlot(merge.obj, 
+        features = c("Gm11549", "Dlk1", "Shox2", "Dsp", "Cabp7", "Adora2a"), 
+        stack = T,
+        flip = T)
+
+#We are still lacking genes for clusters 1 & 3. Let's consider the other genes with high avg log2FC for clusters 1 and 3
+
+VlnPlot(merge.obj, 
+        features = c("Arhgap36", "Pmch",#1
+                     "Ddn", "Ptgds"), #3 
+        stack = T,
+        flip = T)
+#None of these are unique to their cluster.
+
+
+#The following list of genes is from the FA project. In that analysis, these genes were effective marker genes by cluster, as they were found in one cluster but not others. That is not uniformly true for this analysis - some are present across clusters, others are not present in meaningful amounts in the merged adult and young dataset.
+
+VlnPlot(merge.obj, 
+        features = c("Ovol2", "Abhd12b","Thbs4","Ptpn14","Hcrt","Adora2a"), 
+        stack = T,
+        flip = T)
+#This does not help with clusters 1 or 3. It is noteworthy that Adora2a was prominent in both the FA project and this analysis.
+
+#Let's look at the top 10 genes by avg log2FC for cluster 1
+VlnPlot(merge.obj, 
+        features = c("Gpx3", "Ecel1", "Baiap3", "AW551984", "Dlk1", "Arhgap36", "Peg10", "Igsf1", "Cartpt", "Pmch"), 
+        stack = T,
+        flip = T)
+ggsave("./Figures/Genes_Violin/vln_cluster1_top10_log2fc.tiff", device='tiff', dpi=500, height = 5, width = 5, unit = 'in')
+
+#And now the top 10 genes by avg log2FC for cluster 3
+VlnPlot(merge.obj, 
+        features = c("Ddn","Camk2a","Cabp7","Gfap","Hpca","Wipf3","Nr3c2","Ptgds","Neurod6","Fn1"), #Cluster 3
+        stack = T,
+        flip = T)
+ggsave("./Figures/Genes_Violin/vln_cluster1_top10_log2fc.tiff", device='tiff', dpi=500, height = 5, width = 5, unit = 'in')
+
+```
+### Step 2b - Marker Genes by Difference
+As log2fc did not lead to uniform identification of marker genes, we next consider the difference in expression. FindAllMarkers reports pct.1 (the percentage this gene is expressed in this cluster) and pct.2 (the percentage it is expressed across all clusters). Let us examine if pct.1-pct.2 produces effective marker genes by cluster.
+
+```{r}
+merge.obj.marker$diff <- merge.obj.marker$pct.1 -merge.obj.marker$pct.2
+
+merge.obj.marker %>%
+    group_by(cluster) %>%
+    top_n(n = 3, wt = diff) -> top3_diff
+
+top3_diff <- top3_diff[c(1:9,16:18,10:15),]
+
+DoHeatmap(merge.obj, features = top3_diff$gene,group.by = "seurat_clusters")+
+  theme(text = element_text(size = 14)) + 
+  theme(axis.title.x = element_text(size = 8)) + #not axis text, not axis title, not plot title, not legend text, tried using a single theme() and two themes() - same result
+  scale_fill_gradientn(colors = c("blue", "white", "red"))
+ggsave("./Figures/Genes_Violin/Heatmap_top3_diff.tiff", device='tiff', dpi=500, height = 5, width = 5, unit = 'in')
+
+
+VlnPlot(merge.obj, 
+        features = c("Gm11549", "Gpx3", "Tcf7l2", "Dsp", "Cabp7", "Adora2a"),
+        stack = T,
+        flip = T)
+ggsave("./Figures/Genes_Violin/vln_top3_diff.tiff", device='tiff', dpi=500, height = 5, width = 5, unit = 'in')
+#This did not produce good markers for clusters 1 or 3. 
+#Let's examine the other top genes by difference for clusters 1 & 3.
+
+#Cluster 1
+VlnPlot(merge.obj, 
+        features = c("Gpx3", "Ecel1", "Baiap3", "AW551984", "Dlk1", "Arhgap36", "Rassf8", "Peg10", "Agt", "Igsf1"), #These are the top genes from cluster 1 by difference
+        stack = T,
+        flip = T)
+#None are unique - Clusters 1 & 2 seem related
+
+#Cluster 3
+VlnPlot(merge.obj, 
+        features = c("Ddn","Cabp7","Gfap","Wipf3","Zbtb20","Nr3c2","Sowaha","Lhx2","Neurod6","Mertk"), #These are the top genes from cluster 3 by difference
+        stack = T,
+        flip = T)
+
+
+#Clusters 1 and 3 correspond anatomically to the hippocampus, white matter regions, and hypothalamus. 
+#Is there a biological explanation?
+
+
+```
+
+
+
+
+
+```
+
