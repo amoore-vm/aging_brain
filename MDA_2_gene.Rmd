@@ -1,6 +1,7 @@
 ##Mouse Development and Aging 
 ###File 2
 ###Gene Expression Analysis
+###Last Updated 2024_09_25
 
 
 ```{r}
@@ -11,18 +12,29 @@ library(patchwork)
 library(dplyr)
 library(tidyr)
 library(ggplot2)
+
+#The following is for enrichGO (Gene Ontology); install once
+#if (!require("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+#BiocManager::install("clusterProfiler")
 library(clusterProfiler) #enrichGO
 
-setwd("C:/Users/Spouse/Documents/Research/Xie/MouseDevelopment")
-load("C:/Users/Spouse/Documents/Research/Xie/MouseDevelopment/MD_merge.obj.Rdata")
-#load merge.obj from MD_load_thru_cluster.Rmd
+#The following is for Volcano Plots. Run install once.
+BiocManager::install("ComplexHeatmap") #required for scRNAtoolVis
+install.packages('devtools')
+devtools::install_github('junjunlab/scRNAtoolVis')
+
+library(scRNAtoolVis) #Volcano Plots; requires tidyverse
+
+load("MDA_merge.obj.Rdata")
+#load merge.obj from File 1: MDA_1_load_thru_cluster.Rmd
 
 ```
 
 ### Step 1 - Marker genes by sample
-Are certain marker genes more prominent in young samples compared with adult samples, or vice-versa? This is a form of quality control.
+Certain marker genes are expected to be distributed similarly in any analyzed sample. We will check this as a form of quality control.
 
-
+ 
 ```{r}
 color_palette <- c("mf_p21_rep1" = "red", "mf_p21_rep2" = "yellow", "adult_1" = "blue", "adult_2" = "green")
 #This ensures the samples are coded with the same colors consistently across our visualizations.
@@ -45,7 +57,7 @@ ggsave("./Figures/Genes_Violin/B2m_4_samples.tiff", device='tiff', dpi=500, heig
 ```
 ### Step 2a - Marker Genes by Cluster - avg log2FC
 Our goal is to identify genes that are highly expressed in one cluster but poorly expressed in other clusters to serve as marker genes per cluster. This reinforces that each cluster represents distinct anatomical regions that in turn express distinct genes. 
-In our lab's FA Project, this was done by considering avg_log2FC. First, we generate a heat map; then we generate violin plots for each cluster using the gene with the highest avg_log2FC. However, that did not produce good results for this dataset. The top genes by avg_log2FC in Cluster 0 were also highly expressed in the other clusters. Thus, in Step 2b, we consider an alternative method for selecting marker genes by cluster.
+In our lab's FA Project, this was done by considering avg_log2FC. First, we generate a heat map; then we generate violin plots for each cluster using the gene with the highest avg_log2FC. However, that did not produce good results for this dataset using Seurat clusters. The top genes by avg_log2FC in Cluster 0 were also highly expressed in the other clusters. Thus, in Steps 2b & 2c, we consider alternative methods for selecting marker genes by cluster.
 
 ```{r}
 #Top 10 genes per cluster by average log2FC
@@ -59,7 +71,7 @@ top10 <- top10[c(1:30,51:60,31:50),]
 
 DoHeatmap(merge.obj, features = top10$gene, group.by = "seurat_clusters") +
   theme(text = element_text(size = 10)) +
-  scale_fill_gradientn(colors = c("blue", "white", "red"))# + theme(axis.text.y = element_blank())
+  scale_fill_gradientn(colors = c("blue", "white", "red")) 
 ggsave("./Figures/Genes_Violin/Heatmap_top10.tiff", device='tiff', dpi=500, height = 5, width = 5, unit = 'in')
 #This is a bit crowded, so let's select fewer genes (more signal, less noise)
 
@@ -115,6 +127,7 @@ VlnPlot(merge.obj,
         flip = T)
 ggsave("./Figures/Genes_Violin/vln_cluster1_top10_log2fc.tiff", device='tiff', dpi=500, height = 5, width = 5, unit = 'in')
 
+
 ```
 ### Step 2b - Marker Genes by Difference
 As log2fc did not lead to uniform identification of marker genes, we next consider the difference in expression. FindAllMarkers reports pct.1 (the percentage this gene is expressed in this cluster) and pct.2 (the percentage it is expressed across all clusters). Let us examine if pct.1-pct.2 produces effective marker genes by cluster.
@@ -160,18 +173,116 @@ VlnPlot(merge.obj,
 #Clusters 1 and 3 correspond anatomically to the hippocampus, white matter regions, and hypothalamus. 
 #Is there a biological explanation?
 
-#Let's look at the marker genes identified by Wu et al. (2024)
+#Let's look at the hippocampal marker genes identified by Wu et al. (2024)
 #HPF = hippocampal formation in their work
 VlnPlot(merge.obj, 
-        features = c("Pkp2", "Gpr161", "Homer3", "Dsc3", "Grp"), 
+        features = c("Pkp2", "Gpr161", "Homer3", "Dsc3", "Grp", "Prox1"), 
+        stack = T,
+        flip = T)
+
+
+```
+### Step 2c - Marker Genes by Anatomy
+
+In the previous steps, we examined marker genes by cluster. For some clusters (especially cluster 3, to a lesser extent cluster 1), conventional approaches to finding marker genes were unsuccessful. Thus, we considered how the clusters relate to anatomical regions and combined clusters to cover the hippocampus. Simultaneously, anatomical names were assigned to each cluster for improved visualization and interpretation of results and considered a lower threshold for pct in order to maximize the difference between pct.1 and pct.2. 
+
+```{r}
+###Anatomical clustering
+cluster.n <- seq(0,5,1)
+anatomy <- c("Cortex", #0
+              "Hypothalamus","Thalamus","Hippocampus","Striatum","Hippocampus")#1-5
+
+cluster_an.df <- data.frame(cluster = cluster.n,
+                            anatomy = anatomy)
+
+merge.obj$anatomy <- cluster_an.df$anatomy[match(merge.obj$seurat_clusters,cluster_an.df$cluster)]
+merge.obj$anatomy <- factor(merge.obj$anatomy, levels = c(c("Cortex","Hippocampus","Thalamus","Hypothalamus","Striatum")))
+
+SpatialDimPlot(merge.obj, images = c("adult_1", "adult_2"), pt.size.factor = 3, group.by = "anatomy", ncol = 2)
+SpatialDimPlot(merge.obj, images = c("mf_p21_rep1", "mf_p21_rep2"), pt.size.factor = 740, group.by = "anatomy", ncol = 2)
+
+SpatialDimPlot(merge.obj, images = "adult_1",pt.size.factor = 3,group.by = "seurat_clusters",ncol = 1)
+#To compare the previous clustering result to current clustering by anatomy
+
+###Marker genes by anatomy
+Idents(merge.obj) <- "anatomy"
+#Top 10 genes per cluster by anatomy
+merge.obj.marker <- FindAllMarkers(merge.obj, only.pos = TRUE, min.pct = 0.1, logfc.threshold = 0.25)
+
+merge.obj.marker$pct.diff <- merge.obj.marker$pct.1 - merge.obj.marker$pct.2
+
+#Repeat Heatmap
+merge.obj.marker %>%
+    group_by(cluster) %>%
+    top_n(n = 3, wt = avg_log2FC) -> top3_an
+
+DoHeatmap(merge.obj, features = top3_an$gene, group.by = "anatomy") +
+  theme(text = element_text(size = 10)) +
+  scale_fill_gradientn(colors = c("blue", "white", "red"))# + theme(axis.text.y = element_blank())
+# ggsave("./Figures/Genes_Violin/Heatmap_top3_an.tiff", device='tiff', dpi=500, height = 5, width = 5, unit = 'in')
+
+```
+### Step 2d - Marker Genes by Anatomical Region
+Manually, we examined the top 10 dataset for genes with a high pct.diff as well as low pct.2. The best results are shared below. 
+
+Liduo shared that it is acceptable for the marker gene to be present in two clusters, for example cluster N and cluster M as long as either cluster N or M has its unique marker gene. If cluster N has a unique marker gene, then a shared marker gene for N and M can be used to isolate cluster M. 
+
+This is done with the cortex & hippocampus, as well as thalamus & hypothalamus below. 
+
+```{r}
+VlnPlot(merge.obj, 
+        features = c("Emx1","Crlf1", 
+                     "Arhgap36",
+                     "Grid2ip","Adora2a"), #3 
         stack = T,
         flip = T)
 
 ```
+### Step 3 - Volcano plots
+Next, let's consider differential gene expression, visualized by volcano plots.
 
+# Transformed Volcano Plot
+```{r}
+#Create a new metadata column to store age data.
+merge.obj$age <- 0
+merge.obj$age[merge.obj$orig.ident %in% c("mf_p21_rep1","mf_p21_rep2")] <- "P21"
+merge.obj$age[merge.obj$orig.ident %in% c("adult_1","adult_2")] <- "Adult"
 
+Idents(merge.obj) <- "anatomy"
 
+#Loop to make old to young mice in each brain region
+for(br in unique(merge.obj$anatomy)){
+      marker <- FindMarkers(merge.obj,
+                           ident.1 = "P21", ident.2 = "Adult",
+                           group.by = 'age',
+                           subset.ident = anatomy)
+      
+      marker$brain.region <- br
+      
+      marker$gene <- rownames(marker)
+      marker$regulation <- ifelse(marker$avg_log2FC > 0,paste0("Up"),paste0("Down"))
+
+      marker$sig <- "not_sig"
+      marker$sig[abs(marker$avg_log2FC) > log2(1.2) & marker$p_val_adj < 0.05] <- paste(br,"sig",sep = "_")
+      marker$sig <- factor(marker$sig, levels = c("not_sig",paste(br,"sig",sep = "_")))
+      
+      assign(paste(br,"deg",sep = "."), marker)
+      
+      # write.csv(marker, file = paste0("./DEG_tables/",paste(ct,"marker.csv", sep = ".")))
+      }
+
+#Preparation for volcano plot
+combine.deg.df <- rbind(Cortex.deg,
+                        Hippocampus.deg,
+                        Hypothalamus.deg,
+                        Thalamus.deg,
+                        Striatum.deg)
+colnames(combine.deg.df)[6] <- "cluster"
+
+#VolcanoPlot
+scRNAtoolVis::markerVolcano(markers = combine.deg.df,
+              topn = 10,
+              labelCol = ggsci::pal_npg()(9))
 
 
 ```
-
