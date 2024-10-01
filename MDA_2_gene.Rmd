@@ -1,7 +1,7 @@
 ##Mouse Development and Aging 
 ###File 2
 ###Gene Expression Analysis
-###Last Updated 2024_09_25
+###Last updated 09/30/24
 
 
 ```{r}
@@ -13,18 +13,21 @@ library(dplyr)
 library(tidyr)
 library(ggplot2)
 
+#The following is for Volcano Plots. Run install once.
+#BiocManager::install("ComplexHeatmap") #required for scRNAtoolVis
+#install.packages('devtools')
+#devtools::install_github('junjunlab/scRNAtoolVis')
+
+library(scRNAtoolVis) #Volcano Plots; requires tidyverse
+
 #The following is for enrichGO (Gene Ontology); install once
 #if (!require("BiocManager", quietly = TRUE))
 #    install.packages("BiocManager")
 #BiocManager::install("clusterProfiler")
 library(clusterProfiler) #enrichGO
-
-#The following is for Volcano Plots. Run install once.
-BiocManager::install("ComplexHeatmap") #required for scRNAtoolVis
-install.packages('devtools')
-devtools::install_github('junjunlab/scRNAtoolVis')
-
-library(scRNAtoolVis) #Volcano Plots; requires tidyverse
+#BiocManager::install("org.Mm.eg.db")
+library(org.Mm.eg.db) #gene ontology
+library(enrichplot) #gene ontology
 
 load("MDA_merge.obj.Rdata")
 #load merge.obj from File 1: MDA_1_load_thru_cluster.Rmd
@@ -241,7 +244,7 @@ VlnPlot(merge.obj,
 ### Step 3 - Volcano plots
 Next, let's consider differential gene expression, visualized by volcano plots.
 
-# Transformed Volcano Plot
+
 ```{r}
 #Create a new metadata column to store age data.
 merge.obj$age <- 0
@@ -251,11 +254,12 @@ merge.obj$age[merge.obj$orig.ident %in% c("adult_1","adult_2")] <- "Adult"
 Idents(merge.obj) <- "anatomy"
 
 #Loop to make old to young mice in each brain region
-for(br in unique(merge.obj$anatomy)){
-      marker <- FindMarkers(merge.obj,
-                           ident.1 = "P21", ident.2 = "Adult",
-                           group.by = 'age',
-                           subset.ident = anatomy)
+for(i in unique(merge.obj$anatomy)){
+      temp.obj <- subset(merge.obj, anatomy==br)
+marker <- FindMarkers(temp.obj,
+                      ident.1 = "P21", ident.2 = "Adult",
+                      group.by = 'age'
+                      )
       
       marker$brain.region <- br
       
@@ -267,8 +271,6 @@ for(br in unique(merge.obj$anatomy)){
       marker$sig <- factor(marker$sig, levels = c("not_sig",paste(br,"sig",sep = "_")))
       
       assign(paste(br,"deg",sep = "."), marker)
-      
-      # write.csv(marker, file = paste0("./DEG_tables/",paste(ct,"marker.csv", sep = ".")))
       }
 
 #Preparation for volcano plot
@@ -283,6 +285,58 @@ colnames(combine.deg.df)[6] <- "cluster"
 scRNAtoolVis::markerVolcano(markers = combine.deg.df,
               topn = 10,
               labelCol = ggsci::pal_npg()(9))
+```
+### Step 4 - Gene Ontology
+
+
+
+```{r}
+for(br in unique(merge.obj$orig.ident)){#number of groups compared
+      assign("eg", bitr(rownames(marker), fromType="SYMBOL", toType="ENTREZID",OrgDb="org.Mm.eg.db"))
+  
+      ego <- enrichGO(gene = eg$ENTREZID,
+                      OrgDb = org.Mm.eg.db,
+                      ont = "BP",
+                      pAdjustMethod = "BH",
+                      pvalueCutoff  = 0.05,
+                      qvalueCutoff = 0.05,
+                      readable = TRUE)
+      if (nrow(ego@result[ego@result$p.adjust < 0.05 & ego@result$qvalue < 0.05,]) <= 0){
+        next
+      }
+      ego <- pairwise_termsim(ego)
+      ego <- simplify(ego)
+      
+      
+      # write.csv(ego@result, file = paste(ct.name,time[i],"cfcvscc.GO.csv", sep = "."))
+      write.csv(ego@result, file = paste(ct.name,time[i],"weanedvsadult_20240930.GO.csv", sep = "."))
+      # write.csv(ego@result, file = paste(ct.name,time[i],"ccvshomecage.GO.csv", sep = "."))
+
+      go_analysis <- ego@result[ego@result$p.adjust < 0.05 & ego@result$qvalue < 0.05,]
+
+      simMatrix <- calculateSimMatrix(go_analysis$ID,
+                                      orgdb="org.Mm.eg.db",
+                                      ont="BP",
+                                      method="Rel")
+
+      scores <- setNames(-log10(go_analysis$qvalue), go_analysis$ID)
+      reducedTerms <- reduceSimMatrix(simMatrix,
+                                      scores,
+                                      threshold=0.7,
+                                      orgdb="org.Mm.eg.db")
+      treemapPlot(reducedTerms)
+
+      ggsave(paste(ct.name,time[i],"weanedvsadult.GO.tiff", sep = "."),
+             device='tiff', dpi=500, height = 10, width = 10, unit = 'in')
+      ggsave(paste(ct.name,time[i],"weanedvsadult.GO.csv", sep = "."),
+             device='tiff', dpi=500, height = 10, width = 10, unit = 'in')
+      }
+#output: 
+# 'select()' returned 1:1 mapping between keys and columns
+# Warning in bitr(rownames(marker), fromType = "SYMBOL", toType = "ENTREZID",  :
+#   3.17% of input gene IDs are fail to map...
+# Error in eval(expr, p) : object 'ct.name' not found
+
 
 
 ```
