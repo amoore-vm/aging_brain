@@ -28,6 +28,8 @@ library(clusterProfiler) #enrichGO
 #BiocManager::install("org.Mm.eg.db")
 library(org.Mm.eg.db) #gene ontology
 library(enrichplot) #gene ontology
+#BiocManager::install("rrvgo")
+library(rrvgo) #gene ontology
 
 load("MDA_merge.obj.Rdata")
 #load merge.obj from File 1: MDA_1_load_thru_cluster.Rmd
@@ -210,12 +212,12 @@ SpatialDimPlot(merge.obj, images = "adult_1",pt.size.factor = 3,group.by = "seur
 ###Marker genes by anatomy
 Idents(merge.obj) <- "anatomy"
 #Top 10 genes per cluster by anatomy
-merge.obj.marker <- FindAllMarkers(merge.obj, only.pos = TRUE, min.pct = 0.1, logfc.threshold = 0.25)
+merge.obj.marker.an <- FindAllMarkers(merge.obj, only.pos = TRUE, min.pct = 0.1, logfc.threshold = 0.25)
 
-merge.obj.marker$pct.diff <- merge.obj.marker$pct.1 - merge.obj.marker$pct.2
+merge.obj.marker.an$pct.diff <- merge.obj.marker$pct.1 - merge.obj.marker.an$pct.2
 
 #Repeat Heatmap
-merge.obj.marker %>%
+merge.obj.marker.an %>%
     group_by(cluster) %>%
     top_n(n = 3, wt = avg_log2FC) -> top3_an
 
@@ -254,7 +256,7 @@ merge.obj$age[merge.obj$orig.ident %in% c("adult_1","adult_2")] <- "Adult"
 Idents(merge.obj) <- "anatomy"
 
 #Loop to make old to young mice in each brain region
-for(i in unique(merge.obj$anatomy)){
+for(br in unique(merge.obj$anatomy)){
       temp.obj <- subset(merge.obj, anatomy==br)
 marker <- FindMarkers(temp.obj,
                       ident.1 = "P21", ident.2 = "Adult",
@@ -290,7 +292,9 @@ scRNAtoolVis::markerVolcano(markers = combine.deg.df,
 
 
 
-```{r}
+unused code:
+
+
 for(br in unique(merge.obj$orig.ident)){#number of groups compared
       assign("eg", bitr(rownames(marker), fromType="SYMBOL", toType="ENTREZID",OrgDb="org.Mm.eg.db"))
   
@@ -339,4 +343,50 @@ for(br in unique(merge.obj$orig.ident)){#number of groups compared
 
 
 
+```{r}
+assign("eg", bitr(rownames(marker), fromType="SYMBOL", toType="ENTREZID",OrgDb="org.Mm.eg.db"))
+
+      ego <- enrichGO(gene = eg$ENTREZID,
+                      OrgDb = org.Mm.eg.db,
+                      ont = "BP",
+                      pAdjustMethod = "BH",
+                      pvalueCutoff  = 0.05,
+                      qvalueCutoff = 0.05,
+                      readable = TRUE)
+      if (nrow(ego@result[ego@result$p.adjust < 0.05 & ego@result$qvalue < 0.05,]) <= 0){
+        next
+      }
+      ego <- pairwise_termsim(ego)
+      ego <- simplify(ego)
+      
+      time<-c("P21","Adult")
+      
+      # write.csv(ego@result, file = paste(ct.name,time[i],"cfcvscc.GO.csv", sep = "."))
+      write.csv(ego@result, file = paste(br,time[br],"weanedvsadult_20240930.GO.csv", sep = "."))
+      # write.csv(ego@result, file = paste(ct.name,time[i],"ccvshomecage.GO.csv", sep = "."))
+
+      go_analysis <- ego@result[ego@result$p.adjust < 0.05 & ego@result$qvalue < 0.05,]
+
+      simMatrix <- calculateSimMatrix(go_analysis$ID,
+                                      orgdb="org.Mm.eg.db",
+                                      ont="BP",
+                                      method="Rel")
+
+      scores <- setNames(-log10(go_analysis$qvalue), go_analysis$ID)
+      reducedTerms <- reduceSimMatrix(simMatrix,
+                                      scores,
+                                      threshold=0.7,
+                                      orgdb="org.Mm.eg.db")
+      treemapPlot(reducedTerms, position.legend = "right", fontsize.legend = 6) 
+
+      ggsave(paste(br,time[br],"weanedvsadult.GO.tiff", sep = "."),
+             device='tiff', dpi=500, height = 10, width = 10, unit = 'in')
+      ggsave(paste(br,time[br],"weanedvsadult.GO.csv", sep = "."),
+             device='tiff', dpi=500, height = 10, width = 10, unit = 'in')
+
+#library(shinydashboard)
+#library(DT)
+#library(heatmaply)
+#rrvgo::shiny_rrvgo()      
+      
 ```
