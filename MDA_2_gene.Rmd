@@ -1,7 +1,7 @@
-##Mouse Development and Aging 
+###Mouse Development and Aging 
 ###File 2
 ###Gene Expression Analysis
-###Last updated 10/01/24
+###Last updated 
 
 
 ```{r}
@@ -20,7 +20,7 @@ library(ggplot2)
 
 library(scRNAtoolVis) #Volcano Plots; requires tidyverse
 
-#The following is for enrichGO (Gene Ontology); install once
+#The following is for Gene Ontology; install once
 #if (!require("BiocManager", quietly = TRUE))
 #    install.packages("BiocManager")
 #BiocManager::install("clusterProfiler")
@@ -28,8 +28,17 @@ library(clusterProfiler) #enrichGO
 #BiocManager::install("org.Mm.eg.db")
 library(org.Mm.eg.db) #gene ontology
 library(enrichplot) #gene ontology
+#BiocManager::install("EnrichedHeatmap")
+library(EnrichedHeatmap)
 #BiocManager::install("rrvgo")
 library(rrvgo) #gene ontology
+
+library(viridis) #visibly accessible color profiles
+#https://www.data-to-viz.com/graph/heatmap.html
+library(heatmaply)
+
+library(ggupset) #upset plot
+library(pheatmap)
 
 load("MDA_merge.obj.Rdata")
 #load merge.obj from File 1: MDA_1_load_thru_cluster.Rmd
@@ -288,62 +297,14 @@ scRNAtoolVis::markerVolcano(markers = combine.deg.df,
               topn = 10,
               labelCol = ggsci::pal_npg()(9))
 ```
-### Step 4 - Gene Ontology
+### Step 4a - Gene Ontology (GO)
 
+We have identified which genes are upregulated or downregulated in each cluster. Next, we would like to identify what is the general purpose of each gene and what purposes occur most frequently by cluster. 
 
-
-unused code:
-
-
-for(br in unique(merge.obj$orig.ident)){#number of groups compared
-      assign("eg", bitr(rownames(marker), fromType="SYMBOL", toType="ENTREZID",OrgDb="org.Mm.eg.db"))
-  
-      ego <- enrichGO(gene = eg$ENTREZID,
-                      OrgDb = org.Mm.eg.db,
-                      ont = "BP",
-                      pAdjustMethod = "BH",
-                      pvalueCutoff  = 0.05,
-                      qvalueCutoff = 0.05,
-                      readable = TRUE)
-      if (nrow(ego@result[ego@result$p.adjust < 0.05 & ego@result$qvalue < 0.05,]) <= 0){
-        next
-      }
-      ego <- pairwise_termsim(ego)
-      ego <- simplify(ego)
-      
-      
-      # write.csv(ego@result, file = paste(ct.name,time[i],"cfcvscc.GO.csv", sep = "."))
-      write.csv(ego@result, file = paste(ct.name,time[i],"weanedvsadult_20240930.GO.csv", sep = "."))
-      # write.csv(ego@result, file = paste(ct.name,time[i],"ccvshomecage.GO.csv", sep = "."))
-
-      go_analysis <- ego@result[ego@result$p.adjust < 0.05 & ego@result$qvalue < 0.05,]
-
-      simMatrix <- calculateSimMatrix(go_analysis$ID,
-                                      orgdb="org.Mm.eg.db",
-                                      ont="BP",
-                                      method="Rel")
-
-      scores <- setNames(-log10(go_analysis$qvalue), go_analysis$ID)
-      reducedTerms <- reduceSimMatrix(simMatrix,
-                                      scores,
-                                      threshold=0.7,
-                                      orgdb="org.Mm.eg.db")
-      treemapPlot(reducedTerms)
-
-      ggsave(paste(ct.name,time[i],"weanedvsadult.GO.tiff", sep = "."),
-             device='tiff', dpi=500, height = 10, width = 10, unit = 'in')
-      ggsave(paste(ct.name,time[i],"weanedvsadult.GO.csv", sep = "."),
-             device='tiff', dpi=500, height = 10, width = 10, unit = 'in')
-      }
-#output: 
-# 'select()' returned 1:1 mapping between keys and columns
-# Warning in bitr(rownames(marker), fromType = "SYMBOL", toType = "ENTREZID",  :
-#   3.17% of input gene IDs are fail to map...
-# Error in eval(expr, p) : object 'ct.name' not found
-
-
+First, we will examine the genes upregulated in p21 mice.
 
 ```{r}
+#this will analyze the genes upregulated in p21 mice.
 assign("eg", bitr(rownames(marker), fromType="SYMBOL", toType="ENTREZID",OrgDb="org.Mm.eg.db"))
 
       ego <- enrichGO(gene = eg$ENTREZID,
@@ -362,7 +323,7 @@ assign("eg", bitr(rownames(marker), fromType="SYMBOL", toType="ENTREZID",OrgDb="
       time<-c("P21","Adult")
       
       # write.csv(ego@result, file = paste(ct.name,time[i],"cfcvscc.GO.csv", sep = "."))
-      write.csv(ego@result, file = paste(br,time[br],"weanedvsadult_20240930.GO.csv", sep = "."))
+      write.csv(ego@result, file = paste(br,time[br],"hipweanedvsadult_20241003.GO.csv", sep = "."))
       # write.csv(ego@result, file = paste(ct.name,time[i],"ccvshomecage.GO.csv", sep = "."))
 
       go_analysis <- ego@result[ego@result$p.adjust < 0.05 & ego@result$qvalue < 0.05,]
@@ -379,14 +340,310 @@ assign("eg", bitr(rownames(marker), fromType="SYMBOL", toType="ENTREZID",OrgDb="
                                       orgdb="org.Mm.eg.db")
       treemapPlot(reducedTerms, position.legend = "right", fontsize.legend = 6) 
 
-      ggsave(paste(br,time[br],"weanedvsadult.GO.tiff", sep = "."),
-             device='tiff', dpi=500, height = 10, width = 10, unit = 'in')
-      ggsave(paste(br,time[br],"weanedvsadult.GO.csv", sep = "."),
-             device='tiff', dpi=500, height = 10, width = 10, unit = 'in')
+# #      ggsave(paste(br,time[br],"weanedvsadult.GO.tiff", sep = "."),
+#              device='tiff', dpi=500, height = 10, width = 10, unit = 'in')
+#       ggsave(paste(br,time[br],"weanedvsadult.GO.csv", sep = "."),
+#              device='tiff', dpi=500, height = 10, width = 10, unit = 'in')
 
-#library(shinydashboard)
-#library(DT)
-#library(heatmaply)
-#rrvgo::shiny_rrvgo()      
-      
+#Let's also add a dotplot
+dotplot(ego, showCategory=20)
+#ggsave('Figures/dotplot.tiff', device='tiff', dpi=500, 
+#       height = 8, width = 8, unit = 'in')
+
+heatplot_image <- heatplot(ego, showCategory=7)
+# ggsave('Figures/heatplot2.tiff', device='tiff', dpi=500,
+#        height = 8, width = 8, unit = 'in')
+#That is not useful. The genes all overlap and are not legible.
+
+barplot(ego, showCategory=7)
+#ggsave('Figures/barplot.tiff', device='tiff', dpi=500,
+#       height = 8, width = 8, unit = 'in')
+
+#Supplemental figure 5 in FA
+#upsetplot(ego)
+#That is not useful. The genes all overlap and are not legible.
+
 ```
+
+###Step 5a - Hippocampus - Upregulated in p21
+First, let's view the gene annotation sets upregulated in the p21 mouse hippocampus. 
+
+```{r}
+#Let's try to only view the genes upregulated in the hippocampus in p21 brains
+hip_data <- subset(merge.obj, anatomy=="Hippocampus")
+hip_marker <- FindMarkers(hip_data,
+                      ident.1 = "P21", ident.2 = "Adult",
+                      group.by = 'age'
+                      )
+      
+      hip_marker$brain.region <- "Hippocampus"
+      
+      hip_marker$gene <- rownames(hip_marker)
+      hip_marker$regulation <- ifelse(hip_marker$avg_log2FC > 0,paste0("Up"),paste0("Down"))
+      hip_marker <- subset(hip_marker, hip_marker$avg_log2FC >0)
+      #only the upregulated genes
+        
+        
+      hip_marker$sig <- "not_sig"
+      hip_marker$sig[abs(hip_marker$avg_log2FC) > log2(1.2) & hip_marker$p_val_adj < 0.05] <- paste("Hippocampus","sig",sep = "_")
+      hip_marker$sig <- factor(hip_marker$sig, levels = c("not_sig",paste("Hippocampus","sig",sep = "_")))
+
+length(unique(hip_marker$gene))      
+#10136 genes upregulated in p21 mice in the hippocampus
+          
+assign("eg", bitr(rownames(hip_marker), fromType="SYMBOL", toType="ENTREZID",OrgDb="org.Mm.eg.db"))
+
+      hip_ego <- enrichGO(gene = eg$ENTREZID,
+                      OrgDb = org.Mm.eg.db,
+                      ont = "BP",
+                      pAdjustMethod = "BH",
+                      pvalueCutoff  = 0.05,
+                      qvalueCutoff = 0.05,
+                      readable = TRUE)
+      if (nrow(hip_ego@result[hip_ego@result$p.adjust < 0.05 & hip_ego@result$qvalue < 0.05,]) <= 0){
+        next
+      }
+      hip_ego <- pairwise_termsim(hip_ego)
+      hip_ego <- simplify(hip_ego)
+
+length(unique(hip_ego@result[["Description"]]))      
+#699 unique GO annotation terms
+
+      time<-c("P21","Adult")
+      
+      # write.csv(ego@result, file = paste(ct.name,time[i],"cfcvscc.GO.csv", sep = "."))
+      write.csv(hip_ego@result, file = paste("Hippocampus","hipweanedvsadult_20241003.GO.csv", sep = "."))        
+
+#This produces 891 unique GO annotation terms. Let's group similar terms for more interpretable results
+      hip_go_analysis <- hip_ego@result[hip_ego@result$p.adjust < 0.05 & ego@result$qvalue < 0.05,]
+      hip_simMatrix <- calculateSimMatrix(hip_go_analysis$ID,
+                                      orgdb="org.Mm.eg.db",
+                                      ont="BP",
+                                      method="Rel")
+
+      hip_scores <- setNames(-log10(hip_go_analysis$qvalue), hip_go_analysis$ID)
+      hip_reducedTerms9 <- reduceSimMatrix(hip_simMatrix,
+                                      hip_scores,
+                                      threshold=0.9,#increase threshold to reduce # of groups
+                                      orgdb="org.Mm.eg.db")
+#0.9 gives 34 clusters instead of 0.7 giving 137; 0.95 gives 32
+#but there are multiple terms associated per cluster
+write.csv(hip_reducedTerms9, file = paste("hip_UP_reducedTerms9.csv", sep = ","))
+#collect a list of only the unique parent terms
+hip_up_reducedTerms9_parentTerms <- c()
+hip_up_reducedTerms9_parentTerms <- unique(hip_reducedTerms9$parentTerm)
+
+print(hip_up_reducedTerms9_parentTerms)
+
+#  [1] "extracellular matrix organization"                                     
+#  [2] "ameboidal-type cell migration"                                             
+#  [3] "epithelial tube morphogenesis"                                             
+#  [4] "cell-substrate adhesion"                                                   
+#  [5] "phospholipid metabolic process"                                            
+#  [6] "tissue migration"                                                          
+#  [7] "negative regulation of locomotion"                                         
+#  [8] "regulation of epithelial cell proliferation"                               
+#  [9] "regulation of cell growth"                                                 
+# [10] "calcium ion transport"                                                     
+# [11] "regulation of cellular response to growth factor stimulus"                 
+# [12] "positive regulation of hydrolase activity"                                 
+# [13] "cell-cell signaling by wnt"                                                
+# [14] "regulation of actin cytoskeleton organization"                             
+# [15] "neuron apoptotic process"                                                  
+# [16] "regulation of cellular component size"                                     
+# [17] "rhythmic process"                                                          
+# [18] "establishment or maintenance of cell polarity"                             
+# [19] "regulation of microtubule-based process"                                   
+# [20] "sex differentiation"                                                       
+# [21] "temperature homeostasis"                                                   
+# [22] "chromosome segregation"                                                    
+# [23] "regulation of cell division"                                               
+# [24] "pigmentation"                                                              
+# [25] "B cell receptor signaling pathway"                                         
+# [26] "biological process involved in interaction with host"                      
+# [27] "cell recognition"                                                          
+# [28] "single stranded viral RNA replication via double stranded DNA intermediate"
+# [29] "membrane docking"                                                          
+# [30] "regulation of plasma lipoprotein particle levels"                          
+# [31] "cell-cell fusion"                                                          
+# [32] "biological phase" 
+
+
+#Let's visualize the parent terms
+# heatmapPlot(  #package rrvgo
+#   hip_simMatrix,
+#   reducedTerms = hip_reducedTerms9,
+#   annotateParent = TRUE,
+#   annotationLabel = "parentTerm",
+#   fontsize=6
+# )
+#Everything is overlapped;unhelpful
+
+
+dotplot(hip_ego, showCategory=18)
+ggsave('Figures/Hip/up_hip_dotplot.tiff', device='tiff', dpi=500,
+      height = 8, width = 8, unit = 'in')
+
+#heatplot_image <- heatplot(ego, showCategory=10)
+# ggsave('Figures/heatplot2.tiff', device='tiff', dpi=500,
+#        height = 8, width = 8, unit = 'in')
+#That is not useful. The genes all overlap and are not legible.
+
+barplot(hip_ego, showCategory=18)
+ggsave('Figures/Hip/up_hip_barplot.tiff', device='tiff', dpi=500,
+      height = 8, width = 8, unit = 'in')
+#Let's arrange it to display Count in descending order
+sorted_hip_ego <- hip_ego %>%
+  arrange(desc(hip_ego@result[["Count"]]))
+barplot(sorted_hip_ego, showCategory=18, font = 12)
+ggsave('Figures/Hip/up_hip_barplot.tiff', device='tiff', dpi=500,
+      height = 8, width = 8, unit = 'in')
+      
+# ####
+# #make a matrix for the heatmap
+# hip_ego_description <- hip_ego@result[["Description"]]
+# hip_ego_zscore <- hip_ego@result[["zScore"]]
+# #hip_ego_subset_df <- data.frame(Description = hip_ego_description, zScore = hip_ego_zscore)
+# hip_ego_subset_mx <- as.matrix(hip_ego_zscore)
+# rownames(hip_ego_subset_mx) <- hip_ego_description
+# 
+# pheatmap(hip_ego_subset_mx, scale = "row")
+# #heat map should be for all brain regions - columns are regions, rows are GO annotation terms      
+```
+
+###Step 5b - Hippocampus - Upregulated in Adults
+Next, let's examine which genes are upregulated in adults (i.e. downregulated in p21)
+
+```{r}
+hip_data <- subset(merge.obj, anatomy=="Hippocampus")
+hip_marker <- FindMarkers(hip_data,
+                      ident.1 = "P21", ident.2 = "Adult",
+                      group.by = 'age'
+                      )
+      
+      hip_marker$brain.region <- "Hippocampus"
+      
+      hip_marker$gene <- rownames(hip_marker)
+      hip_marker$regulation <- ifelse(hip_marker$avg_log2FC > 0,paste0("Up"),paste0("Down"))
+      Dhip_marker <- subset(hip_marker, hip_marker$avg_log2FC < 0)
+      #only the downregulated genes
+        
+        
+      Dhip_marker$sig <- "not_sig"
+      Dhip_marker$sig[abs(Dhip_marker$avg_log2FC) > log2(1.2) & Dhip_marker$p_val_adj < 0.05] <- paste("Hippocampus","sig",sep = "_")
+      Dhip_marker$sig <- factor(Dhip_marker$sig, levels = c("not_sig",paste("Hippocampus","sig",sep = "_")))
+
+length(unique(Dhip_marker$gene))      
+# 4939 unique marker genes that were downregulated in p21 mice in the hippocampus      
+      
+      
+          
+assign("eg", bitr(rownames(Dhip_marker), fromType="SYMBOL", toType="ENTREZID",OrgDb="org.Mm.eg.db"))
+
+      Dhip_ego <- enrichGO(gene = eg$ENTREZID,
+                      OrgDb = org.Mm.eg.db,
+                      ont = "BP",
+                      pAdjustMethod = "BH",
+                      pvalueCutoff  = 0.05,
+                      qvalueCutoff = 0.05,
+                      readable = TRUE)
+      if (nrow(Dhip_ego@result[Dhip_ego@result$p.adjust < 0.05 & Dhip_ego@result$qvalue < 0.05,]) <= 0){
+        next
+      }
+      Dhip_ego <- pairwise_termsim(Dhip_ego)
+      Dhip_ego <- simplify(Dhip_ego)
+
+length(unique(Dhip_ego@result[["Description"]]))
+#688 unique GO terms upregulated in adults 
+      time<-c("P21","Adult")
+      
+      # write.csv(ego@result, file = paste(ct.name,time[i],"cfcvscc.GO.csv", sep = "."))
+      write.csv(Dhip_ego@result, file = paste("Hippocampus","DOWNhipweanedvsadult.GO.csv", sep = "."))        
+
+#This produces _____ unique GO annotation terms. Let's group similar terms for more interpretable results
+      Dhip_go_analysis <- Dhip_ego@result[Dhip_ego@result$p.adjust < 0.05 & Dhip_ego@result$qvalue < 0.05,]
+      Dhip_simMatrix <- calculateSimMatrix(Dhip_go_analysis$ID,
+                                      orgdb="org.Mm.eg.db",
+                                      ont="BP",
+                                      method="Rel")
+
+      Dhip_scores <- setNames(-log10(Dhip_go_analysis$qvalue), Dhip_go_analysis$ID)
+      Dhip_reducedTerms9 <- reduceSimMatrix(Dhip_simMatrix,
+                                      Dhip_scores,
+                                      threshold=0.9,#increase threshold to reduce # of groups
+                                      orgdb="org.Mm.eg.db")
+
+write.csv(Dhip_reducedTerms9, file = paste("hip_DOWN_reducedTerms9.csv", sep = ","))
+#collect a list of only the unique parent terms
+hip_down_reducedTerms9_parentTerms <- c()
+hip_down_reducedTerms9_parentTerms <- unique(Dhip_reducedTerms9$parentTerm)
+
+print(hip_down_reducedTerms9_parentTerms)
+
+#  [1] "small GTPase-mediated signal transduction"                      
+#  [2] "establishment of protein localization to organelle"             
+#  [3] "postsynapse organization"                                       
+#  [4] "negative regulation of phosphorus metabolic process"            
+#  [5] "regulation of membrane potential"                               
+#  [6] "learning or memory"                                             
+#  [7] "regulation of monoatomic ion transmembrane transporter activity"
+#  [8] "mitotic cell cycle phase transition"                            
+#  [9] "immune response-regulating signaling pathway"                   
+# [10] "intracellular calcium ion homeostasis"                          
+# [11] "rhythmic process"                                               
+# [12] "ameboidal-type cell migration"                                  
+# [13] "regulation of cell growth"                                      
+# [14] "neuron apoptotic process"                                       
+# [15] "forebrain development"                                          
+# [16] "muscle cell proliferation"                                      
+# [17] "microtubule-based movement"                                     
+# [18] "Wnt signaling pathway"                                          
+# [19] "regulation of actin filament-based process"                     
+# [20] "regulation of leukocyte cell-cell adhesion"                     
+# [21] "viral process"                                                  
+# [22] "negative regulation of locomotion"                              
+# [23] "modulation by host of symbiont process"                         
+# [24] "establishment or maintenance of cell polarity"                  
+# [25] "social behavior"                                                
+# [26] "stem cell division"                                             
+# [27] "organelle localization by membrane tethering"                   
+# [28] "regulation of reproductive process"                             
+# [29] "regulation of plasma lipoprotein particle levels"               
+# [30] "developmental pigmentation"   
+
+dotplot(Dhip_ego, showCategory=18)
+ggsave('Figures/Hip/down_hip_dotplot.tiff', device='tiff', dpi=500,
+      height = 8, width = 8, unit = 'in')
+
+#heatplot_image <- heatplot(ego, showCategory=10)
+# ggsave('Figures/heatplot2.tiff', device='tiff', dpi=500,
+#        height = 8, width = 8, unit = 'in')
+#That is not useful. The genes all overlap and are not legible.
+
+
+#Let's arrange the bar plot to display Count in descending order
+sorted_Dhip_ego <- Dhip_ego %>%
+  arrange(desc(Dhip_ego@result[["Count"]]))
+barplot(sorted_Dhip_ego, showCategory=18, font = 12)
+ggsave('Figures/Hip/down_hip_barplot.tiff', device='tiff', dpi=500,
+      height = 8, width = 8, unit = 'in')
+
+#Let's explore some other visualization options, such as a treeplot.
+treemapPlot(Dhip_reducedTerms9, position.legend = "right", fontsize.legend = 6)
+ggsave('Figures/Hip/down_hip_treemapplot.tiff', device='tiff', dpi=500,
+      height = 8, width = 8, unit = 'in')
+#Figure is too small
+
+#How many parent terms are shared by p21 and adult?
+parent_terms_Dhip <- unique(Dhip_reducedTerms9$parentTerm)
+parent_terms_hip <- unique(hip_reducedTerms9$parentTerm)
+hip_common_terms <- intersect(parent_terms_Dhip, parent_terms_hip)
+print(hip_common_terms)
+
+#goplot(Dhip_ego)
+#Error in AnnotationDbi::mget(id, GOANCESTOR) : 
+#  second argument must be an environment
+
+#wordcloudPlot(hip_reducedTerms9)
+```
+
