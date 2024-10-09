@@ -1,0 +1,234 @@
+##Mouse Development and Aging 
+###File 1
+###Loading through clustering steps
+###Last Updates Oct 09 24
+
+###Introduction
+We will compare the development of mouse brain cells at different ages of mice. These samples were collected as controls for various other projects. 
+
+FA: 21 days after birth (postnatal) (n=2) ("weaned" or "p21" mice)
+CFC: 12-15 weeks (n=2) ("adult" mice)
+Aged: XXX (n=2) ("aged" mice)
+
+
+```{r}
+#Load packages used in other projects; some are currently unused but are included as they may be useful in the future. 
+
+library(Seurat)
+library(SeuratObject) 
+library(hdf5r) 
+library(rlang)
+library(ggplot2)
+library(harmony)
+library(RColorBrewer)
+library(tidyverse)
+library(patchwork)
+library(dplyr)
+library(tidyr)
+library(gridExtra)
+library(ggvenn)
+library(ComplexUpset)
+library(clustree)
+library(imager) #save.image
+```
+
+
+###Step 1a - Load Adult & Aged Mice Data
+First, we will load the data for the adult & aged mice. There were 2 individuals used as controls for each group, so we will load each replicate individually and then merge the datasets.
+
+```{r}
+adult_1 <- Load10X_Spatial(
+  data.dir = "C:/Users/Spouse/Documents/Research/Xie/CFC/Spatial/home_cage_rep1/outs/",
+  slice = "adult_1",
+)
+adult_1$orig.ident <- "adult_1"
+#The above is Yu's FA code. It did not fix the image pt-size display issue. However, all 5 clusters are now appearing in the key for the adult slices, and the adult slices are named correctly.
+
+adult_2 <- Load10X_Spatial(
+  data.dir = "C:/Users/Spouse/Documents/Research/Xie/CFC/Spatial/home_cage_rep2/outs/",
+  slice = "adult_2",
+)
+adult_2$orig.ident <- "adult_2"
+
+### NR_CIA4 = aged_1
+aged_1 <- Load10X_Spatial(
+  data.dir = "C:/Users/Spouse/Documents/Research/Xie/MouseDevelopment/Aged/NR_CIA4/outs",
+  slice = "aged_1",
+)
+aged_1$orig.ident <- "aged_1"
+###
+### NR_CIA5 = aged_2
+aged_2 <- Load10X_Spatial(
+  data.dir = "C:/Users/Spouse/Documents/Research/Xie/MouseDevelopment/Aged/NR_CIA5/outs",
+  slice = "aged_2",
+)
+aged_2$orig.ident <- "aged_2"
+
+```                  
+
+###Step 1b - Load p21 Mouse Data & Merge All Data
+Now we will merge the data for the adult and aged mice with the data for the p21 mice. The p21 mice data was shared via a Seurat object of the two merged repetitions.
+
+```{r}
+load("~/Research/Xie/High Folate/Control.Rdata")
+merge.obj <- merge(controls, y = list(adult_1, adult_2, aged_1, aged_2), 
+                   add.cell.ids = c("p21", "adult_1", "adult_2", "aged_1", "aged_2"))
+
+#Let's define the order the samples should be displayed, from left to right
+sample_order <- c("mf_p21_rep1", "mf_p21_rep2", "adult_1", "adult_2", "aged_1", "aged_2")
+merge.obj$orig.ident <- factor(merge.obj$orig.ident, levels = sample_order)
+
+#Liduo shared the next line of code to ensure all images displayed after clustering
+merge.obj <- JoinLayers(merge.obj)
+
+#remove unnecessary objects to free up memory
+rm(adult_1, adult_2, aged_1, aged_2, controls)
+```
+
+##Step 2a - Summary Statistics & Quality Control Check
+Let's check the genes per spot and UMIs per spot to verify the integrity of the data. Let's also examine the distribution of genes per spot and UMIs per spot across reads to ensure the quality of the dataset.
+
+```{r}
+summary(merge.obj$nFeature_Spatial)
+   # Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+   #   46    5090    6084    6111    7153   11573 
+
+summary(merge.obj$nCount_Spatial)
+   # Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+   #   48   12226   17453   20895   26025  276518 
+
+#The standard is to remove spots with less than 250 genes per spot, as these are low quality reads. Let's see how many spots are low quality reads in this dataset. 
+
+sum(merge.obj$nFeature_Spatial <= 250) #3 - Excellent!
+
+#Likewise, it is standard to remove spots with less than 500 UMIs per spot. Let's see how frequently this occurred. 
+
+sum(merge.obj$nCount_Spatial <= 500) #6 - Great again!
+
+####Let's also visualize the distribution of genes per spot and UMIs per spot with violin plots of the merged dataset, and then individual source datasets.
+
+color_palette <- c("mf_p21_rep1" = "red", "mf_p21_rep2" = "yellow", "adult_1" = "blue", "adult_2" = "green", "aged_1" = "purple", "aged_2" = "pink")
+#This ensures the samples are coded with the same colors consistently across our visualizations.
+
+VlnPlot(merge.obj, features = c("nFeature_Spatial"), group.by = "orig.ident", pt.size = 0)+
+  scale_fill_manual(values = color_palette)+ guides(fill = FALSE) #guides - show/hide legend
+#ggsave('./Figures/Genes_Violin/Vln.nFeature.tiff', device='tiff', dpi=500, 
+#       height = 5, width = 5, unit = 'in')
+
+VlnPlot(merge.obj, features = c("nCount_Spatial"), group.by = "orig.ident",pt.size = 0)+
+  scale_fill_manual(values = color_palette) + guides(fill = FALSE)
+#ggsave('./Figures/Genes_Violin/Vln.nCount.tiff', device='tiff', dpi=500, 
+#       height = 5, width = 5, unit = 'in')
+#These look good! 
+
+#One final QC step is to look for distribution of 3 housekeeping genes. We will do this before and after normalization to verify that the normalization process was successful
+#use slot = "count" for raw data; use slot = "data" for normalized data
+VlnPlot(merge.obj, features = c("Actb"), group.by = "orig.ident", pt.size = 0, slot = "counts") + scale_fill_manual(values = color_palette) + guides(fill = FALSE) 
+ggsave("./Figures/Genes_Violin/actb_b4_6samples.tiff", device='tiff', dpi=500, height = 5, width = 5, unit = 'in')
+
+VlnPlot(merge.obj, features = c("Top1"), group.by = "orig.ident", pt.size = 0, slot = "counts") + scale_fill_manual(values = color_palette) + guides(fill = FALSE) 
+ggsave("./Figures/Genes_Violin/top1_b4_6samples.tiff", device='tiff', dpi=500, height = 5, width = 5, unit = 'in')
+
+VlnPlot(merge.obj, features = c("B2m"), group.by = "orig.ident", pt.size = 0, slot = "counts") + scale_fill_manual(values = color_palette) + guides(fill = FALSE) 
+ggsave("./Figures/Genes_Violin/B2m_b4_6samples.tiff", device='tiff', dpi=500, height = 5, width = 5, unit = 'in')
+
+```
+
+###Step 2b - Remove Low Quality Spots & Normalize
+
+Let's remove the lowest quality spots (i.e. <=250 genes or <=500 UMIs per spot), normalize via counts per million, select the 3000 most frequent genes and scale the expression values of genes.
+```{r}
+#Remove the lowest quality spots (Genes <=250 or UMIs <= 500)
+merge.obj <- subset(merge.obj, subset = nFeature_Spatial > 250 & nCount_Spatial > 500)
+
+#Normalize to gene frequency in Counts per Million (CPM)
+merge.obj <- NormalizeData(merge.obj, assay = "Spatial", scale.factor = 10**6) 
+
+VlnPlot(merge.obj, features = c("Actb"), group.by = "orig.ident", pt.size = 0, slot = "data") + scale_fill_manual(values = color_palette) + guides(fill = FALSE) 
+ggsave("./Figures/Genes_Violin/actb_after_6samples.tiff", device='tiff', dpi=500, height = 5, width = 5, unit = 'in')
+
+VlnPlot(merge.obj, features = c("Top1"), group.by = "orig.ident", pt.size = 0, slot = "data") + scale_fill_manual(values = color_palette) + guides(fill = FALSE) 
+ggsave("./Figures/Genes_Violin/top1_after_6samples.tiff", device='tiff', dpi=500, height = 5, width = 5, unit = 'in')
+
+VlnPlot(merge.obj, features = c("B2m"), group.by = "orig.ident", pt.size = 0, slot = "data") + scale_fill_manual(values = color_palette) + guides(fill = FALSE) 
+ggsave("./Figures/Genes_Violin/B2m_after_6samples.tiff", device='tiff', dpi=500, height = 5, width = 5, unit = 'in')
+#The data is well normalized. Let's continue.
+
+#Next, let's reduce our dataset to focus on only the 3000 genes of highest relative abundance.
+merge.obj <- FindVariableFeatures(merge.obj, assay = "Spatial", nfeatures = 3000) 
+#Scale the expression values of genes 
+merge.obj <- ScaleData(merge.obj, assay = "Spatial", features = rownames(merge.obj))
+```
+###Step 3a - Noise Reduction - PCA
+Let's select the 15 most common PCs and graph an elbow plot to look for a breakpoint. 
+
+```{r}
+merge.obj <- RunPCA(merge.obj, assay = "Spatial", npcs = 5, features = rownames(merge.obj))
+
+ElbowPlot(merge.obj,ndims = 20) +
+ geom_hline(yintercept = 4.75) + #This may be our breakpoint
+ scale_y_continuous(breaks = c(3,5,10,15,20))
+```
+###Step 3b - Noise Reduction - Harmony
+Using visual analysis of the above, 5, 10, or 15 could be used as breakpoints. Let's proceed with 15 PCs. 
+
+Next, let's perform harmony to reduce the noise from joining separate datasets.
+
+```{r}
+merge.obj <- RunHarmony(merge.obj, "orig.ident", dims.use = 1:15, assay.use = "Spatial") 
+plotHarmony <- ElbowPlot(merge.obj, ndims = 15, reduction = "harmony") +
+ geom_hline(yintercept = 3) +
+ scale_y_continuous(breaks = c(3, 5, 10, 15))
+plotHarmony
+```
+###Step 4a - Clustering - UMAP
+The 5th component of Harmony was less than the 6th component of Harmony and the 9th less than the 10th. This is possible but unusual. Harmony is not essential for UMAP, so we examined UMAP with and without Harmony. The results were poor without Harmony, therefore we proceded with Harmony. 
+
+```{r}
+#With Harmony
+merge.obj <- RunUMAP(merge.obj, dims = 1:15, reduction = "harmony")
+#plot - overlay all 4 controls on a single plot
+UMAP_harmony <- DimPlot(merge.obj, group.by = "orig.ident")
+
+set.seed(505)
+
+```
+###Step 4b - Clustering - Clustree
+
+```{r}
+
+merge.obj <- FindNeighbors(merge.obj, reduction = "harmony", dims = 1:15)
+merge.obj <- FindClusters(merge.obj, resolution = c(0.05, 0.075, 0.1, 0.15, 0.2, 0.25, 0.3),  algorithm = 3)
+clustree(merge.obj)
+ggsave("clustree_15pcs_3.tiff", device='tiff', dpi=500, height = 5, width = 5, unit = 'in')
+#With 15 PCA's, we are getting 12 clusters at 0.3
+
+
+
+
+```
+Other analyses within our lab of mouse brains have used 6 clusters. This corresponds to 0.093. 
+
+```{r}
+# dim_0.075_3 <- SpatialDimPlot(merge.obj, group.by = "Spatial_snn_res.0.075", ncol = 2,label = F, image.alpha = 1, alpha = 1, pt.size.factor = 3)
+# ggsave("dim_0.075_15pcs_3.png") #adult size = 3
+# 
+# dim_0.075_740 <- SpatialDimPlot(merge.obj, group.by = "Spatial_snn_res.0.075", ncol = 2,label = F, image.alpha = 1, alpha = 1, pt.size.factor = 740)
+# ggsave("dim_0.075_15pcs_740.png") #p21 size = 740
+# 
+# dim_0.075_4 <- SpatialDimPlot(merge.obj, group.by = "Spatial_snn_res.0.075", ncol = 2,label = F, image.alpha = 1, alpha = 1, pt.size.factor = 4)
+# ggsave("dim_0.075_15pcs_4.png") #aged size = 4
+
+#Based on this, Ben & I will proceed at resolution 0.075 and use CellSelector to manually adjust the spots. 
+
+
+
+saveRDS(merge.obj, file = "MDA_merge.obj_3.Rdata")
+#save(merge.obj, file = "MDA_merge.obj_3.Rdata")
+#saves current output to speed up future work
+```
+
+
+```{r}
+
+```
