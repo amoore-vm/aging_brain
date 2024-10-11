@@ -1,0 +1,141 @@
+Mouse Development and Aging 
+File 2
+CellSelector
+Last Updates Oct 11 24
+
+
+```{r}
+#Load packages used in other projects; some are currently unused but are included as they may be useful in the future. 
+
+library(Seurat)
+library(SeuratObject) 
+library(hdf5r) 
+library(rlang)
+library(ggplot2)
+library(harmony)
+library(RColorBrewer)
+library(tidyverse)
+library(patchwork)
+library(dplyr)
+library(tidyr)
+library(gridExtra)
+library(ggvenn)
+library(ComplexUpset)
+library(clustree)
+library(imager) #save.image
+```
+
+
+###Step 1 - Load Data & Initial Cluster Merge
+We will first load the data from the previous file. For consistency across the work done by our lab, we will combine clusters 2 & 4 into a single hypothalamus cluster. 
+
+```{r}
+merge.obj <- readRDS("corrected2.merge.obj.rds")
+
+#Verify clusters
+SpatialDimPlot(merge.obj, group.by = "Spatial_snn_res.0.075", pt.size.factor = 4, alpha = 1, image.alpha = 0.5, ncol = 2,label = F)
+
+#Combine clusters 2 & 4 into a single hypothalamus cluster ("2")
+cluster_4_cells <- which(merge.obj$Spatial_snn_res.0.075 == "4")
+
+# Assign these cells to cluster 2
+merge.obj$Spatial_snn_res.0.075[cluster_4_cells] <- "2"
+
+#Verify reassignment
+SpatialDimPlot(merge.obj, group.by = "Spatial_snn_res.0.075", pt.size.factor = 4, alpha = 1, image.alpha = 0.5, ncol = 2,label = F)
+#Success!
+
+```
+###Step 2 - Cell Selector - p21
+Next, we will use the Cell Selector tool to manually adjust the clusters to match known anatomical regions. We will also reassign the ventricular system (VS) to cluster 4. Let's start with the first p21 sample. Then, we will use the same code but with the image changed to mf_p21_rep2 in order to repeat this process with the second p21 sample. 
+
+```{r}
+#Initialize the sample
+
+p1.df <- GetTissueCoordinates(merge.obj, image = 'mf_p21_rep2')
+p1.df$cluster <- merge.obj$Spatial_snn_res.0.075[rownames(p1.df)]
+p1 <- p1.df %>%  ggplot(aes(x = imagerow, y = imagecol, color = cluster)) + geom_point()
+
+###Hippocampus - only needed for p21 sample 1
+#Manually select spots to move to the hippocampus cluster, i.e. #1
+#hip <- CellSelector(p1)
+# Reassign selected cells to cluster 
+#merge.obj$Spatial_snn_res.0.075[hip] <- "1"
+
+
+####Thalamus
+#Manually select spots to move to the thalamus cluster, i.e. #3
+thal <- CellSelector(p1)
+thal2 <- CellSelector(p1)
+selected_cells <- c(thal, thal2)
+# Reassign selected cells to cluster 
+merge.obj$Spatial_snn_res.0.075[selected_cells] <- "3"
+
+####Cortex
+#This one requires a great deal of manual adjustment, so will be done in parts. This will allow us to track our progress in CellSelector and not duplicate already completed work. 
+#The clustering algorithm identified clusters 0 (cortex) and 2 (hippocampus) as similar, so when a spot initially assigned to 2 must be reassigned to either 0 or another cluster, cluster 0 will be preferred.
+#Repeat these sections as necessary to complete manual adjustment
+#reinitialize p1
+p1.df <- GetTissueCoordinates(merge.obj, image = 'mf_p21_rep2')
+p1.df$cluster <- merge.obj$Spatial_snn_res.0.075[rownames(p1.df)]
+p1 <- p1.df %>%  ggplot(aes(x = imagerow, y = imagecol, color = cluster)) + geom_point()
+#Manually select spots to move to the cortex cluster, i.e. #0
+ctx1 <- CellSelector(p1)
+ctx2 <- CellSelector(p1)
+ctx3 <- CellSelector(p1)
+ctx4 <- CellSelector(p1)
+selected_cells <- c(ctx1,ctx2,ctx3,ctx4)
+# Reassign selected cells to cluster 
+merge.obj$Spatial_snn_res.0.075[selected_cells] <- "0"
+
+
+####Striatum #5
+#Part 1
+p1.df <- GetTissueCoordinates(merge.obj, image = 'mf_p21_rep2')
+p1.df$cluster <- merge.obj$Spatial_snn_res.0.075[rownames(p1.df)]
+p1 <- p1.df %>%  ggplot(aes(x = imagerow, y = imagecol, color = cluster)) + geom_point()
+
+str1 <- CellSelector(p1)
+str2 <- CellSelector(p1)
+str3 <- CellSelector(p1)
+selected_cells <- c(str1,str2,str3)
+# Reassign selected cells to cluster 
+merge.obj$Spatial_snn_res.0.075[selected_cells] <- "5"
+
+
+
+####Hypothalamus #2
+p1.df <- GetTissueCoordinates(merge.obj, image = 'mf_p21_rep2')
+p1.df$cluster <- merge.obj$Spatial_snn_res.0.075[rownames(p1.df)]
+p1 <- p1.df %>%  ggplot(aes(x = imagerow, y = imagecol, color = cluster)) + geom_point()
+
+hyp1 <- CellSelector(p1)
+hyp2 <- CellSelector(p1)
+hyp3 <- CellSelector(p1)
+selected_cells <- c(hyp1,hyp2,hyp3)
+# Reassign selected cells to cluster 
+merge.obj$Spatial_snn_res.0.075[selected_cells] <- "2"
+
+
+
+####Ventricular System (VS) #4
+p1.df <- GetTissueCoordinates(merge.obj, image = 'mf_p21_rep2')
+p1.df$cluster <- merge.obj$Spatial_snn_res.0.075[rownames(p1.df)]
+p1 <- p1.df %>%  ggplot(aes(x = imagerow, y = imagecol, color = cluster)) + geom_point()
+
+vs1 <- CellSelector(p1)
+vs2 <- CellSelector(p1)
+vs3 <- CellSelector(p1)
+selected_cells <- c(vs1, vs2)
+# Reassign selected cells to cluster 
+merge.obj$Spatial_snn_res.0.075[selected_cells] <- "4"
+
+#Verify reassignment
+SpatialDimPlot(merge.obj, group.by = "Spatial_snn_res.0.075", pt.size.factor = 740, alpha = 1, image.alpha = 0.5, ncol = 2,label = F)
+ggsave("C:/Users/Spouse/Documents/Research/Xie/MouseDevelopment/Figures/dim_0.075_15pcs_cs_p21.png") 
+#Success!
+saveRDS(merge.obj,file = "cluster_adj_p21.rds")
+```
+
+
+
