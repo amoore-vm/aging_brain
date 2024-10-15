@@ -1,0 +1,232 @@
+Mouse Development and Aging 
+File 3
+Gene Onotology (GO) analysis
+Last updated Oct 15 2024
+
+
+```{r}
+library(Seurat)
+library(SeuratObject) 
+library(tidyverse)
+library(patchwork)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+#The following packages are all installed via BiocManager. 
+#Use the following code (editing as appropriate) to install any missing packages.
+#if (!require("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+#BiocManager::install("clusterProfiler")
+
+library(scRNAtoolVis) #Volcano Plots; requires tidyverse
+library(clusterProfiler) #enrichGO
+library(org.Mm.eg.db) #gene ontology
+library(enrichplot) #gene ontology visualization
+library(EnrichedHeatmap) #gene ontology visualization
+library(readr) #required for rrvgo
+library(rrvgo) #gene ontology visualization
+
+marker <- readRDS("all_degs_p21.rds")
+
+
+```
+###Step 1 - Volcano Plot
+Initial visualization both to visualize the DEGs and also to verify data has loaded correctly.
+
+```{r}
+#colnames(marker)[colnames(marker) == "Cluster"] <- "cluster"
+#jjVolcano(diffData = marker)
+#This runs but is messy. Let's try the other volcano. 
+
+#let's rename the clusters for clarity
+marker <- marker %>%
+  mutate(cluster = ifelse(cluster == "Cortex_adult_vs_P21", "Cortex", cluster))
+marker <- marker %>%
+  mutate(cluster = ifelse(cluster == "Hippocampus_adult_vs_P21", "Hippocampus", cluster))
+marker <- marker %>%
+  mutate(cluster = ifelse(cluster == "Thalamus_adult_vs_P21", "Thalamus", cluster))
+marker <- marker %>%
+  mutate(cluster = ifelse(cluster == "Hypothalamus_adult_vs_P21", "Hypothalamus", cluster))
+marker <- marker %>%
+  mutate(cluster = ifelse(cluster == "Striatum_adult_vs_P21", "Striatum", cluster))
+marker <- marker %>%
+  mutate(cluster = ifelse(cluster == "Ventricular System", "Ventricular.Sys", cluster))#renamed this twice so it would display on the graph
+
+#VolcanoPlot
+markerVolcano(markers = marker,
+              topn = 3,
+              labelCol = ggsci::pal_npg()(9))
+ggsave('./Figures/DEG/volcano_adult_vs_p21.png', height = 5, width = 8, unit = 'in')
+#that's much cleaner
+
+
+```
+###Step 2 - Gene Ontology (1.5)
+Next, let us consider gene ontology analysis of the whole brain of our p21 samples compared with those of the adult samples.
+
+We will do this at two different thresholds: 
+(1) avg_log2FC = 1.5 
+(2) avg_log2FC = 2
+
+Please adjust the code in the first line of code and the name of the saved images when switching from 1.5 to 2. 
+
+```{r}
+final_DEGs_1.5 <- marker %>% dplyr::filter(p_val_adj < 0.05, abs(avg_log2FC) > log2(1.5), pct.1 > 0.1, pct.2 > 0.1)
+
+assign("eg", bitr(rownames(final_DEGs_1.5), fromType="SYMBOL", toType="ENTREZID",OrgDb="org.Mm.eg.db"))
+
+      ego <- enrichGO(gene = eg$ENTREZID,
+                      OrgDb = org.Mm.eg.db,
+                      ont = "BP",
+                      pAdjustMethod = "BH",
+                      pvalueCutoff  = 0.05,
+                      qvalueCutoff = 0.05,
+                      readable = TRUE)
+      if (nrow(ego@result[ego@result$p.adjust < 0.05 & ego@result$qvalue < 0.05,]) <= 0){
+        next
+      }
+      
+      ego <- pairwise_termsim(ego)
+      ego <- simplify(ego) 
+      
+      
+     go_analysis <- ego@result[ego@result$p.adjust < 0.05 & ego@result$qvalue < 0.05,]
+
+      simMatrix <- calculateSimMatrix(go_analysis$ID,
+                                      orgdb="org.Mm.eg.db",
+                                      ont="BP",
+                                      method="Rel")
+
+      scores <- setNames(-log10(go_analysis$qvalue), go_analysis$ID)
+      reducedTerms <- reduceSimMatrix(simMatrix,
+                                      scores,
+                                      threshold=0.7,
+                                      orgdb="org.Mm.eg.db")
+
+
+dotplot(ego, showCategory=15)
+ggsave('./Figures/GO/GO_dotplot_p21vsadult_1.5.png',   height = 7, width = 7, unit = 'in')
+
+#Generate a barplot sorting by descending order
+ego@result <- ego@result %>% arrange(desc(Count))
+
+barplot(ego, showCategory=15)
+ggsave('./Figures/GO/GO_barplot_p21vsadult_1.5.png',   height = 7, width = 7, unit = 'in')
+
+#Alternative VolcanoPlot
+jjVolcano(diffData = final_DEGs_1.5,
+          log2FC.cutoff = log(1.5,2),
+          adjustP.cutoff = 0.05,
+          topGeneN = 0,
+          tile.col = c("#F8766D","#B79F00","#00BA38","#00BFC4",'purple','orange'),
+          base_size  = 18,
+          legend.position = "none",
+          pSize = 1.5,
+          celltypeSize = 5
+          ) +
+   xlab("") +
+   ylab("Average log2FoldChange") 
+
+ggsave("./Figures/GO/jjVolcano-1.5FC-p21.png", height = 7, width = 11, unit = 'in')
+
+```
+
+
+```{r}
+
+CTX <- subset(final_DEGs_1.5, cluster == 'Cortex')
+HY <- subset(final_DEGs_1.5, cluster == 'Hypothalamus')
+TH <- subset(final_DEGs_1.5, cluster == 'Thalamus')
+HP <- subset(final_DEGs_1.5, cluster == 'Hippocampus')
+STR <- subset(final_DEGs_1.5, cluster == 'Striatum')
+VS <- subset(final_DEGs_1.5, cluster == 'Ventricular.Sys')
+
+
+#run this block for each region
+ego_HY <- enrichGO(
+  gene = HY$gene, 
+  OrgDb = org.Mm.eg.db, 
+  keyType = "SYMBOL", 
+  ont = "BP", 
+  pAdjustMethod = "BH", 
+  pvalueCutoff = 0.05, 
+  qvalueCutoff = 0.05, 
+  readable = TRUE
+)
+
+write.csv(ego@result, file = "./HY_1.5FC.GO.BP.csv")
+ 
+
+files <- c("./GO/CTX_1.5FC.GO.BP.csv","./GO/HY_1.5FC.GO.BP.csv","./GO/TH_1.5FC.GO.BP.csv","./GO/HP_1.5FC.GO.BP.csv","./GO/STR_1.5FC.GO.BP.csv","./GO/VS_1.5FC.GO.BP.csv")
+
+
+# Read files into a list of data frames
+CTXgo <- read.csv("./GO/CTX_1.5FC.GO.BP.csv")
+#CTXgo <- CTXgo[,c("ID","pvalue")]
+#write.csv(CTXgo,'./GO/go_terms_CTX.csv',row.names = F)
+HYgo <- read.csv("./GO/HY_1.5FC.GO.BP.csv")
+#HYgo <- HYgo[,c("ID","pvalue")]
+#write.csv(HYgo,'./GO/go_terms_HY.csv',row.names = F)
+THgo <- read.csv("./GO/TH_1.5FC.GO.BP.csv")
+#THgo <- THgo[,c("ID","pvalue")]
+#write.csv(THgo,'./GO/go_terms_TG.csv',row.names = F)
+HPgo <- read.csv("./GO/HP_1.5FC.GO.BP.csv")
+#HPgo <- HPgo[,c("ID","pvalue")]
+#write.csv(HPgo,'./GO/go_terms_HP.csv',row.names = F)
+STRgo <- read.csv("./GO/STR_1.5FC.GO.BP.csv")
+#STRgo <- STRgo[,c("ID","pvalue")]
+#write.csv(STRgo,'./GO/go_terms_STR.csv',row.names = F)
+VSgo <- read.csv("./GO/VS_1.5FC.GO.BP.csv")
+#VSgo <- VSgo[,c("ID","pvalue")]
+#write.csv(VSgo,'./GO/go_terms_VS.csv',row.names = F)
+
+CTXgo$Cluster <- 'CTX'
+HYgo$Cluster <- 'HY'
+THgo$Cluster <- 'TH'
+HPgo$Cluster <- 'HP'
+STRgo$Cluster <- 'STR'
+VSgo$Cluster <- 'VS'
+
+
+# Combine all data frames into one
+combined_ego_results <- bind_rows(CTXgo, HYgo, THgo, HPgo, STRgo, VSgo)
+
+# Select top 5 terms for each cluster based on adjusted p-value
+top_terms <- combined_ego_results %>%
+  group_by(Cluster) %>%
+  top_n(-5, wt = p.adjust)
+
+
+ggplot(top_terms, aes(x = Description, y = -log10(p.adjust), color = Cluster)) +
+  geom_point(aes(size = Count)) +
+  coord_flip() +
+  labs(x = "", y = "-log10(Adjusted p-value)", title = "P21 VS. Adult DEG GO Terms by Cluster") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(size = 16),
+    axis.text.y = element_text(size = 16),
+    axis.title = element_text(size = 16),
+    legend.title = element_text(size = 16),
+    legend.text = element_text(size = 16),
+    plot.title = element_text(size = 16, hjust = 0.5)
+  )
+ggsave("./Figures/GO/dot_1.5FC-p21.png", bg = "white", height = 7, width = 7, unit = 'in')
+
+#try again
+ggplot(top_terms, aes(x = Description, y = -log10(p.adjust), color = Cluster)) +
+  geom_point(aes(size = Count)) +
+  coord_flip() +
+  labs(x = "", y = "-log10(Adjusted p-value)", title = "TDP vs AD DEG GO Terms by Cluster") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(size = 16),
+    axis.text.y = element_text(size = 16),
+    axis.title = element_text(size = 16),
+    legend.title = element_text(size = 16),
+    legend.text = element_text(size = 16),
+    plot.title = element_text(size = 16, hjust = 0.5)
+  )
+
+
+```
