@@ -1,0 +1,460 @@
+Mouse Development and Aging 
+File 5
+Gene Onotology (GO) analysis - Up & Downregulated Genes Common to Both p21 & Aged Mice vs. Adults
+Last updated Oct 25 2024
+
+
+```{r}
+library(Seurat)
+library(SeuratObject) 
+library(tidyverse)
+library(patchwork)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggvenn)
+
+#The following packages are all installed via BiocManager. 
+#Use the following code (editing as appropriate) to install any missing packages.
+#if (!require("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+#BiocManager::install("clusterProfiler")
+
+library(scRNAtoolVis) #Volcano Plots; requires tidyverse
+library(clusterProfiler) #enrichGO
+library(org.Mm.eg.db) #gene ontology
+library(enrichplot) #gene ontology visualization
+library(EnrichedHeatmap) #gene ontology visualization
+library(readr) #required for rrvgo
+library(rrvgo) #gene ontology visualization
+library(enrichplot) #GOA visualization
+
+p21_byCluster_down <- readRDS("C:/Users/Spouse/Documents/Research/Xie/MouseDevelopment/Intersect/p21_byCluster_down.rds")
+p21_byCluster_up <- readRDS("C:/Users/Spouse/Documents/Research/Xie/MouseDevelopment/Intersect/p21_byCluster_up.rds")
+aged_byCluster_down <- readRDS("C:/Users/Spouse/Documents/Research/Xie/MouseDevelopment/Intersect/aged_byCluster_down.rds")
+aged_byCluster_up <- readRDS("C:/Users/Spouse/Documents/Research/Xie/MouseDevelopment/Intersect/aged_byCluster_up.rds")
+
+
+filtered_DEGs_p21 <- readRDS("C:/Users/Spouse/Documents/Research/Xie/MouseDevelopment/Intersect/filtered_DEGs_p21.rds")
+filtered_DEGs_aged <- readRDS("C:/Users/Spouse/Documents/Research/Xie/MouseDevelopment/Intersect/filtered_DEGs_aged.rds")
+```
+###Step 1 - Intersection by Cluster
+We are interested in which genes are upregulated (or downregulated) in both p21 & aged mice as compared to adults in each cluster accessible in our tissue samples. 
+
+```{r}
+cluster_list = c("Cortex", "Hippocampus", "Thalamus", "Hypothalamus", "Striatum")
+direction_list = c("up", "down")
+
+# Loops through clusters and directions
+for (br in cluster_list) {
+  for (direction in direction_list) {
+    # Create variable names dynamically
+    aged_vs_p21_name <- paste0(br, "_Aged_P21_", direction)
+    common_aged_name <- paste0(br, "_common_", direction, "_aged")
+    common_p21_name <- paste0(br, "_common_", direction, "_p21")
+    
+    # Common genes between aged and P21 for current cluster and direction
+    aged_vs_p21 <- intersect(get(paste0("aged_byCluster_", direction))[[paste0(br, "_adult_vs_aged")]],
+                             get(paste0("p21_byCluster_", direction))[[paste0(br, "_adult_vs_P21")]])
+    
+    # Subset of common genes from the aged DEG file
+    common_aged <- filtered_DEGs_aged[filtered_DEGs_aged$gene %in% aged_vs_p21 & filtered_DEGs_aged$Cluster == paste0(br, "_adult_vs_aged"), ]
+    
+    # Subset of common genes for P21, ensuring Cluster matches br_adult_vs_P21
+    common_p21 <- filtered_DEGs_p21[filtered_DEGs_p21$gene %in% aged_vs_p21 & 
+                                    filtered_DEGs_p21$Cluster == paste0(br, "_adult_vs_P21"), ]
+    # Note that these subsets should be identical  - doing both is a quality control check 
+    
+    # Assign the created objects with dynamic names
+    assign(aged_vs_p21_name, aged_vs_p21)
+    assign(common_aged_name, common_aged)
+    assign(common_p21_name, common_p21)
+
+    # Save as a CSV file
+    csv_filename <- paste0(br, "_common_", direction, ".csv")
+    write.csv(common_aged, file = csv_filename, row.names = FALSE)
+    
+    }
+}
+```
+###Hippocampus
+We had no significant results for upregulated genes in common in the hippocampus with log2fold change > 1.5, so we are trying to reduce the threshold to generate more results.
+
+
+```{r}
+
+all_degs_aged <- readRDS('C:/Users/Spouse/Documents/Research/Xie/MouseDevelopment/all_degs_aged.rds')
+all_degs_aged$avg_log2FC <- -(all_degs_aged$avg_log2FC)
+saveRDS(all_degs_aged,'all_degs_aged.rds')
+
+all_degs_p21 <- readRDS('C:/Users/Spouse/Documents/Research/Xie/MouseDevelopment/all_degs_p21.rds')
+
+new_log2 <- 0.3
+
+final_DEGs_aged <- all_degs_aged %>% dplyr::filter(p_val_adj < 0.05, abs(avg_log2FC) > log2(new_log2), pct.1 > 0.1, pct.2 > 0.1) 
+final_DEGs_p21 <- all_degs_p21 %>% dplyr::filter(p_val_adj < 0.05, abs(avg_log2FC) > log2(new_log2), pct.1 > 0.1, pct.2 > 0.1) 
+
+
+
+  #Common genes between cortex of P21 and Aged
+  Hippocampus_Aged_P21_up1 <- intersect(aged_byCluster_up$Hippocampus_adult_vs_aged,p21_byCluster_up$Hippocampus_adult_vs_P21)    
+  #subset of common genes
+  Hippocampus_common_up_aged1 <- filtered_DEGs_aged[filtered_DEGs_aged$gene %in% Hippocampus_Aged_P21_up1 & filtered_DEGs_aged$Cluster == "Hippocampus_adult_vs_P21", ]
+  Hippocampus_common_up_p211 <- filtered_DEGs_p21[filtered_DEGs_p21$gene %in% Hippocampus_Aged_P21_up1, ]   
+
+```
+###Step 2 - GO - Intersect
+Let's examine the gene ontology annotations that describe the intersection of genes upregulated in both p21 & aged mice by region as well as those downregulated in both age groups. 
+
+
+```{r}
+for (br in cluster_list) {
+  for (direction in direction_list) {
+    # Create variable names dynamically
+    common_name <- paste0(br, "_Aged_P21_", direction)
+    print(paste0("Working on ", common_name))
+    
+    #The following step is necessary to avoid warning "No gene can be mapped"
+    get_common_name <- get(common_name)
+    
+    ego <- enrichGO(
+      gene = get_common_name,  
+      OrgDb = org.Mm.eg.db, 
+      keyType = "SYMBOL", 
+      ont = "BP", 
+      pAdjustMethod = "BH", 
+      pvalueCutoff = 0.05, 
+      qvalueCutoff = 0.05, 
+      readable = TRUE
+    )
+    csv_filename <- paste0(br, "_EGO_", direction, ".csv")
+    write.csv(ego, file = csv_filename, row.names = FALSE)
+    
+      # 
+      # go_analysis <- ego@result[ego@result$p.adjust < 0.05 & ego@result$qvalue < 0.05,]
+      # 
+      # simMatrix <- calculateSimMatrix(go_analysis$ID,
+      #                                 orgdb="org.Mm.eg.db",
+      #                                 ont="BP",
+      #                                 method="Rel")
+      # 
+      # scores <- setNames(-log10(go_analysis$qvalue), go_analysis$ID)
+      # reducedTerms <- reduceSimMatrix(simMatrix,
+      #                                 scores,
+      #                                 threshold=0.7,
+      #                                 orgdb="org.Mm.eg.db")
+      # csv_filename <- paste0(br, "_Reduced_EGO_", direction, ".csv")
+      # write.csv(ego, file = csv_filename, row.names = FALSE)
+  }
+}
+
+```
+###Hippocampus
+The following is a code block to test why the Hippocampus upregulated gene ontology code is returning a blank csv file. - It seems nothing is significant (p-adj > 0.066)
+
+```{r}
+
+# I tried changing from symbol to entrezid but received an error: 
+# --> No gene can be mapped....
+# --> Expected input gene ID: 227394,13006,52679,22788,67713,80912
+# --> return NULL...
+#So I converted back to Symbol. 
+
+# assign("eg", bitr(rownames(Hippocampus_Aged_P21_up), fromType="SYMBOL", toType="ENTREZID",OrgDb="org.Mm.eg.db"))
+    
+    ego <- enrichGO(
+      gene = Thalamus_Aged_P21_down,  #put the short gene lists here
+      OrgDb = org.Mm.eg.db, 
+      keyType = "SYMBOL", 
+      ont = "BP", 
+      pAdjustMethod = "BH", 
+      pvalueCutoff = 0.05, 
+      qvalueCutoff = 0.05, 
+      readable = TRUE
+    )
+     csv_filename <- paste0("Hippocampus_EGO_up.csv")
+      # go_analysis <- ego@result[ego@result$p.adjust < 0.05 & ego@result$qvalue < 0.05,]
+      # 
+      # simMatrix <- calculateSimMatrix(go_analysis$ID,
+      #                                 orgdb="org.Mm.eg.db",
+      #                                 ont="BP",
+      #                                 method="Rel")
+      # 
+      # scores <- setNames(-log10(go_analysis$qvalue), go_analysis$ID)
+      # reducedTerms <- reduceSimMatrix(simMatrix,
+      #                                 scores,
+      #                                 threshold=0.7,
+      #                                 orgdb="org.Mm.eg.db")
+      csv_filename <- paste0("Hippocampus_EGO_up.csv")
+      write.csv(ego@result, file = csv_filename, row.names = FALSE)
+
+
+```
+###Step 3 - GO - Up
+Let's examine which genes are trending towards increased expression over time (i.e. downregulated in p21 samples and upregulated in aged samples). Then let's perform GOA on this set.
+
+```{r}
+# Loops through clusters at the intersection of p21-down and aged-up
+for (br in cluster_list) {
+    # Create variable names dynamically
+    trend_name <- paste0(br, "_trend_up")
+    trend_aged_name <- paste0(br, "_trend_up_aged")
+    trend_p21_name <- paste0(br, "_trend_up_p21")
+    
+    # Intersections of p21-down & aged-up
+    trend_set <- intersect(aged_byCluster_up[[paste0(br, "_adult_vs_aged")]],p21_byCluster_down[[paste0(br, "_adult_vs_P21")]])
+    
+    # Subset from the aged DEG file
+    trend_aged <- filtered_DEGs_aged[filtered_DEGs_aged$gene %in% trend_set & 
+                                      filtered_DEGs_aged$Cluster == paste0(br, "_adult_vs_aged"), ]
+    
+    # Subset of common genes for P21, ensuring Cluster matches br_adult_vs_P21
+    trend_p21 <- filtered_DEGs_p21[filtered_DEGs_p21$gene %in% trend_set & 
+                                    filtered_DEGs_p21$Cluster == paste0(br, "_adult_vs_P21"), ]
+    # Note that these subsets should be identical  - doing both is a quality control check 
+    
+    # Assign the created objects with dynamic names
+    assign(trend_name, trend_set)
+    assign(trend_aged_name, trend_aged)
+    assign(trend_p21_name, trend_p21)
+
+    # Save as a CSV file
+    csv_filename <- paste0(br, "_trend_up.csv")
+    write.csv(trend_aged, file = csv_filename, row.names = FALSE)
+    #As trend_aged & trend_p21 are identical, we can use either here
+    
+}
+
+# Gene ontology annotation for the gene sets isolated above
+
+for (br in cluster_list) {
+    # Create variable names dynamically
+    common_name <- paste0(br, "_trend_up")
+    print(paste0("Working on ", common_name))
+    
+    #The following step is necessary to avoid warning "No gene can be mapped"
+    get_common_name <- get(common_name)
+    
+    ego <- enrichGO(
+      gene = get_common_name,  
+      OrgDb = org.Mm.eg.db, 
+      keyType = "SYMBOL", 
+      ont = "BP", 
+      pAdjustMethod = "BH", 
+      pvalueCutoff = 0.05, 
+      qvalueCutoff = 0.05, 
+      readable = TRUE
+    )
+    csv_filename <- paste0(br, "_EGO_trend_up.csv")
+    write.csv(ego, file = csv_filename, row.names = FALSE)
+    
+    # ### 
+    # #This code block is useful for generating certain visualizations
+    #   go_analysis <- ego@result[ego@result$p.adjust < 0.05 & ego@result$qvalue < 0.05,]
+    # 
+    #   simMatrix <- calculateSimMatrix(go_analysis$ID,
+    #                                   orgdb="org.Mm.eg.db",
+    #                                   ont="BP",
+    #                                   method="Rel")
+    # 
+    #   scores <- setNames(-log10(go_analysis$qvalue), go_analysis$ID)
+    #   reducedTerms <- reduceSimMatrix(simMatrix,
+    #                                   scores,
+    #                                   threshold=0.7,
+    #                                   orgdb="org.Mm.eg.db")
+    #   ###
+      
+      # csv_filename <- paste0(br, "_Reduced_EGO_", direction, ".csv")
+      # write.csv(ego, file = csv_filename, row.names = FALSE)
+}
+
+
+
+```
+###Step 4 - GO - Down
+Let's now look at gene expression trending downwards (i.e. upregulated in p21 and downregulated in aged), including gene ontology annotation. 
+
+```{r}
+# Loops through clusters at the intersection of p21-up and aged-down
+for (br in cluster_list) {
+    # Create variable names dynamically
+    trend_name <- paste0(br, "_trend_down")
+    trend_aged_name <- paste0(br, "_trend_down_aged")
+    #trend_p21_name <- paste0(br, "_trend_down_p21") #For QC
+    
+    # Intersections of p21-down & aged-up
+    trend_set <- intersect(aged_byCluster_down[[paste0(br, "_adult_vs_aged")]],p21_byCluster_up[[paste0(br, "_adult_vs_P21")]])
+    
+    # Subset from the aged DEG file
+    trend_aged <- filtered_DEGs_aged[filtered_DEGs_aged$gene %in% trend_set & filtered_DEGs_aged$Cluster == paste0(br, "_adult_vs_aged"), ]
+    
+    # # Subset of common genes for P21, QC ensuring Cluster matches br_adult_vs_P21
+    # trend_p21 <- filtered_DEGs_p21[filtered_DEGs_p21$gene %in% trend_set & 
+    #                                 filtered_DEGs_p21$Cluster == paste0(br, "_adult_vs_P21"), ]
+    # Note that these subsets should be identical  - doing both is a quality control check 
+    
+    # Assign the created objects with dynamic names
+    assign(trend_name, trend_set)
+    assign(trend_aged_name, trend_aged)
+    #assign(trend_p21_name, trend_p21)
+
+    # Save as a CSV file
+    csv_filename <- paste0(br, "_trend_down.csv")
+    write.csv(trend_aged, file = csv_filename, row.names = FALSE)
+    #As trend_aged & trend_p21 are identical, we can use either here
+    
+}
+
+
+
+# GOA 
+for (br in cluster_list) {
+    # Create variable names dynamically
+    common_name <- paste0(br, "_trend_down")
+    print(paste0("Working on ", common_name))
+    
+    #The following step is necessary to avoid warning "No gene can be mapped"
+    get_common_name <- get(common_name)
+    
+    ego <- enrichGO(
+      gene = get_common_name,  
+      OrgDb = org.Mm.eg.db, 
+      keyType = "SYMBOL", 
+      ont = "BP", 
+      pAdjustMethod = "BH", 
+      pvalueCutoff = 0.05, 
+      qvalueCutoff = 0.05, 
+      readable = TRUE
+    )
+    csv_filename <- paste0(br, "_EGO_trend_down.csv")
+    write.csv(ego, file = csv_filename, row.names = FALSE)
+    
+    # ### 
+    # #This code block is useful for generating certain visualizations
+    #   go_analysis <- ego@result[ego@result$p.adjust < 0.05 & ego@result$qvalue < 0.05,]
+    # 
+    #   simMatrix <- calculateSimMatrix(go_analysis$ID,
+    #                                   orgdb="org.Mm.eg.db",
+    #                                   ont="BP",
+    #                                   method="Rel")
+    # 
+    #   scores <- setNames(-log10(go_analysis$qvalue), go_analysis$ID)
+    #   reducedTerms <- reduceSimMatrix(simMatrix,
+    #                                   scores,
+    #                                   threshold=0.7,
+    #                                   orgdb="org.Mm.eg.db")
+    #   ###
+      
+      # csv_filename <- paste0(br, "_Reduced_EGO_", direction, ".csv")
+      # write.csv(ego, file = csv_filename, row.names = FALSE)
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```
+###Step 5 - GO - Union
+Finally, let's return to looking at the genes differentially expressed in both p21 & aged mice; this time, let's combine up- and downregulated genes to see how it affects GOA. 
+
+
+```{r}
+#First, let's combine our upregulated & downregulated intersection files for each brain region.
+
+
+for (br in cluster_list) {
+  
+  up_name <- paste0(br, "_Aged_P21_up")
+  down_name <- paste0(br, "_Aged_P21_down")
+  
+  #Use get() to extract the gene entries
+  up_genes <- get(up_name)
+  down_genes <- get(down_name)
+  
+  #Join the two lists (union of up and down)
+  combined_genes <- union(up_genes, down_genes)
+  
+  # Assign the combined gene list to a new variable
+  combined_name <- paste0(br, "_Aged_P21_union")
+  assign(combined_name, combined_genes)
+
+  
+  ##Next, let's perform GO analysis on each union set
+
+    
+    #The following step is necessary to avoid warning "No gene can be mapped"
+    get_common_name <- get(combined_name) #using variable created in last step
+    
+    ego <- enrichGO(
+      gene = get_common_name,  
+      OrgDb = org.Mm.eg.db, 
+      keyType = "SYMBOL", 
+      ont = "BP", 
+      pAdjustMethod = "BH", 
+      pvalueCutoff = 0.05, 
+      qvalueCutoff = 0.05, 
+      readable = TRUE
+    )
+    csv_filename <- paste0(br, "_EGO_union.csv")
+    write.csv(ego, file = csv_filename, row.names = FALSE)
+    
+  
+  
+  
+}
+
+
+
+
+```
+
+###Step 6 - Visualizations
+We are exploring various options for visualizations. Uncomment out the ones you need. 
+
+```{r}
+#treemapPlot(reducedTerms, position.legend = "right", fontsize.legend = 6)
+
+for (br in cluster_list){
+    # Create variable names dynamically
+    cluster_name_p21 <- paste0(br, "_DEGs_p21")
+    cluster_name_aged <- paste0(br, "_DEGs_aged")
+    
+    cluster_p21 <- filtered_DEGs_p21$gene[filtered_DEGs_p21$Cluster == paste0(br, "_adult_vs_P21")]
+    cluster_aged <- filtered_DEGs_aged$gene[filtered_DEGs_aged$Cluster == paste0(br, "_adult_vs_aged")]
+
+    assign(cluster_name_p21, cluster_p21)
+    assign(cluster_name_aged, cluster_aged)
+}
+
+age_list = c("p21", "aged")
+
+for (br in cluster_list){
+  for (age in age_list){
+    
+    
+  }
+  
+}
+
+# 
+gene_venn <- list("p21 Cortex DEGs" = Cortex_DEGs_p21,
+          "Aged Cortex DEGs" = Cortex_DEGs_aged)
+ggvenn(gene_venn)
+
+
+
+```
