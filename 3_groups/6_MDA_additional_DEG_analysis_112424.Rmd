@@ -1,0 +1,1768 @@
+---
+title: "6_MDA_additional_DEG_analysis"
+author: "Amanda Moore"
+date: "`r Sys.Date()`"
+output: html_document
+---
+###Load packages & Data
+
+```{r}
+set.seed(55)
+
+library(Seurat)
+library(SeuratObject) 
+library(tidyverse)
+library(patchwork)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggvenn)
+
+#The following packages are all installed via BiocManager. 
+#Use the following code (editing as appropriate) to install any missing packages.
+#if (!require("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+#BiocManager::install("clusterProfiler")
+
+library(scRNAtoolVis) #Volcano Plots; requires tidyverse
+library(clusterProfiler) #enrichGO
+library(org.Mm.eg.db) #gene ontology
+library(enrichplot) #gene ontology visualization
+library(EnrichedHeatmap) #gene ontology visualization
+library(readr) #required for rrvgo
+library(rrvgo) #gene ontology visualization
+library(enrichplot) #GOA visualization
+
+ merge.obj <- readRDS("C:/Users/Spouse/Documents/Research/Xie/MouseDevelopment/fixed_data/FinalannotatedMerge.obj.rds")
+ merge.obj <- JoinLayers(merge.obj)
+```
+### DEGs - p21 vs adult - All DEGs
+Up and downregulated together. 
+
+```{r}
+# merge.obj.marker <- FindAllMarkers(merge.obj, only.pos = TRUE, min.pct = 0.5, logfc.threshold = 0.25)
+
+merge.obj$age <- 0
+merge.obj$age[merge.obj$orig.ident %in% c("P21_1","P21_2")] <- "P21"
+merge.obj$age[merge.obj$orig.ident %in% c("adult_1","adult_2")] <- "Adult"
+merge.obj$age[merge.obj$orig.ident %in% c("aged_1","aged_2")] <- "Aged"
+
+cluster_list = c("Cortex", "Hippocampus", "Thalamus", "Hypothalamus", "Striatum")
+
+early_response_genes <- c('Fos','Fosb','Fosl2','Junb','Arc','Npas4','Egr1','Egr2','Egr3','Nr4a1','Gadd45b')
+filtered_DEGs_aged <- final_DEGs_aged[!final_DEGs_aged$gene %in% early_response_genes, ]
+
+
+#Loop to get p21 vs. adult DEGs for each brain region
+for(br in cluster_list){
+      temp.obj <- subset(merge.obj, idents=br)
+marker <- FindMarkers(temp.obj,
+                      ident.1 = "P21", ident.2 = "Adult",
+                      group.by = 'age'
+                      )
+      
+      marker$brain.region <- br
+      
+      marker$gene <- rownames(marker)
+
+      marker <- marker %>%
+        dplyr::filter(p_val_adj < 0.05, abs(avg_log2FC) > log2(1.5), pct.1 > 0.1, pct.2 > 0.1) #all together
+      marker <- marker[!marker$gene %in% early_response_genes, ]
+      assign(paste(br,"P21.deg",sep = "."),marker)
+      csv_filename <- paste0(br, "_p21_DEG_FindMarker_all.csv")
+      write.csv(marker, file = csv_filename, row.names = FALSE)
+}
+
+#Generate dataframes for up only and down only by region
+for(br in cluster_list){
+  file_name <- paste0(br,"..P21.deg")
+  working_file <- get(file_name)
+  working_file <- working_file %>%
+    dplyr::filter(avg_log2FC < -1.5) #only up  
+  assign(paste0("P21.Down.", br), working_file)  
+}
+```
+
+### DEGs - p21 vs adult - only up
+Upregulated only. 
+
+```{r}
+
+# This was run above and only needs to run once 
+# merge.obj$age <- 0
+# merge.obj$age[merge.obj$orig.ident %in% c("P21_1","P21_2")] <- "P21"
+# merge.obj$age[merge.obj$orig.ident %in% c("adult_1","adult_2")] <- "Adult"
+# merge.obj$age[merge.obj$orig.ident %in% c("aged_1","aged_2")] <- "Aged"
+
+cluster_list = c("Cortex", "Hippocampus", "Thalamus", "Hypothalamus", "Striatum")
+
+#Loop to get p21 vs. adult DEGs for each brain region
+for(br in cluster_list){
+      temp.obj <- subset(merge.obj, idents=br)
+marker <- FindMarkers(temp.obj,
+                      ident.1 = "P21", ident.2 = "Adult",
+                      group.by = 'age'
+                      )
+      
+      marker$brain.region <- br
+      
+      marker$gene <- rownames(marker)
+
+      marker <- marker %>%
+        dplyr::filter(p_val_adj < 0.05, avg_log2FC < log2(1.5)) #only up
+  
+      assign(paste(br,"P21.down.deg",sep = "."), marker)
+      csv_filename <- paste0(br, "_p21_DEG_down_FindMarker.csv")
+      write.csv(marker, file = csv_filename, row.names = FALSE)
+}
+
+
+```
+###GO - p21 vs. adult
+
+
+```{r}
+
+
+cluster_list = c("Cortex", "Hippocampus", "Thalamus", "Hypothalamus", "Striatum")
+
+for (br in cluster_list) {
+    common_name <- paste0(br, ".up.deg")
+    get_common_name <- get(common_name)
+    eg <- bitr(rownames(get_common_name), fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Mm.eg.db")
+  
+    ego <- enrichGO(
+      gene = eg$ENTREZID,  
+      OrgDb = org.Mm.eg.db, 
+      ont = "BP", 
+      pAdjustMethod = "BH", 
+      pvalueCutoff = 0.05, 
+      qvalueCutoff = 0.05, 
+      readable = TRUE
+    )
+    assign(paste(br,"ego",sep = "."), ego)
+    csv_filename <- paste0(br, "_EGO_p21_fixed_up.csv")
+    write.csv(ego, file = csv_filename, row.names = FALSE)
+    
+}
+
+```
+### p21 - Heatmap of DEGs related to myelination, gliogenesis, and/or neurogenesis
+
+
+
+```{r}
+
+# Define the brain regions list
+brain_regions <- c("Cortex", "Hippocampus", "Thalamus", "Hypothalamus", "Striatum")
+
+# Initialize an empty list to store data for each region
+EGO_data <- list()
+
+# Loop through each brain region to load data
+for (region in brain_regions) {
+  # Create the file path dynamically
+  file_path <- paste0("C:/Users/Spouse/Documents/Research/Xie/MouseDevelopment/fixed_data/nov/", region, "_EGO_p21_fixed_up.csv")
+  
+  # Read the CSV file and add it to the list, with a new column for the region name
+  EGO_data[[region]] <- read.csv(file_path) %>%
+    mutate(Region = region)  # Add a column to identify the region
+}
+
+# Combine all data frames in the list into a single data frame
+EGO_df <- bind_rows(EGO_data)
+
+#Create a new column -log(p_val_adj)
+EGO_df <- EGO_df %>%
+  mutate(neg_log_p.adj = -log(p.adjust))
+
+region_order <- c("Hippocampus", "Cortex", "Thalamus", "Hypothalamus", "Striatum")
+
+# Ensure the 'Region' column in down_trends_df is a factor with the specified order
+EGO_df$Region <- factor(EGO_df$Region, levels = region_order)
+
+# Subset with only the GO terms of interest
+# ALL 3 - Myelination, Gliogenesis, Neurogenesis
+subset_EGO_df <- EGO_df %>%
+  filter(Description %in% c("myelination", "ensheathment of neurons", "axon ensheathment", "myelin assembly", "central nervous system myelination", "axon ensheathment in central nervous system", #myelination
+                            "gliogenesis", "oligodendrocyte differentiation", "glial cell differentiation", "glial cell development", #gliogenesis
+                            "regulation of neurogenesis", "neuroblast proliferation", "positive regulation of neurogenesis", "negative regulation of neurogenesis", "negative regulation of nervous system development", "regulation of axonogenesis", "neuron apoptotic process"
+ #neurogenesis
+))
+# 
+# #Subset with only the GO terms of interest
+# # ONLY neurogenesis
+# subset_EGO_df <- EGO_df %>%
+#   filter(Description %in% c("regulation of neurogenesis", "neuroblast proliferation", "positive regulation of neurogenesis", "negative regulation of neurogenesis", "negative regulation of nervous system development", "regulation of axonogenesis"
+#  #neurogenesis
+# ))
+
+
+# 
+# 
+# #can also look at the top 20 terms by -log(p.adj)
+# top20_data <- EGO_df %>%
+#   arrange(desc(neg_log_p.adj)) %>%
+#   slice_head(n = 20)
+
+# Create the heatmap - Fold
+
+ggplot(subset_EGO_df, aes(x = Region, y = Description, fill = FoldEnrichment)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "lightblue", high = "darkblue", name = "FoldEnrichment") +
+  labs(title = "Upregulated Enriched Pathways by FoldEnrichment and Cluster",
+       x = "Cluster",
+       y = "Pathway") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggsave('./Figures/heatmap_p21_FoldEnrichment_MGN_1105_up.tiff', dpi=300, height = 7, width = 7, unit = 'in')
+
+
+# pval
+
+ggplot(subset_EGO_df, aes(x = Region, y = Description, fill = neg_log_p.adj)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "lightblue", high = "darkblue", name = "-log(p.adj)") +
+  labs(title = "Upregulated Enriched Pathways by -log(p.adj)",
+       x = "Cluster",
+       y = "Pathway") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggsave('./Figures/heatmap_p21_neglogpadj_MGN_1105_up.tiff', dpi=300, height = 7, width = 7, unit = 'in')
+
+# # top 20 - p.adj
+# 
+# ggplot(top20_data, aes(x = Region, y = Description, fill = neg_log_p.adj)) +
+#   geom_tile(color = "white") +
+#   scale_fill_gradient(low = "lightblue", high = "darkblue", name = "-log(p.adj)") +
+#   labs(title = "Top 20 Enriched Pathways by -log(p.adj)",
+#        x = "Cluster",
+#        y = "Pathway") +
+#   theme_minimal() +
+#   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+# 
+# ggsave('./Figures/heatmap_p21_top20_1535.tiff', dpi=300, height = 7, width = 7, unit = 'in')
+# 
+# # top20 - Fold enrich
+# ggplot(top20_data, aes(x = Region, y = Description, fill = FoldEnrichment)) +
+#   geom_tile(color = "white") +
+#   scale_fill_gradient(low = "lightblue", high = "darkblue", name = "FoldEnrichment") +
+#   labs(title = "Top 20 Enriched Pathways by FoldEnrichment",
+#        x = "Cluster",
+#        y = "Pathway") +
+#   theme_minimal() +
+#   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+# 
+# ggsave('./Figures/heatmap_p21_top20_foldenrich_1535.tiff', dpi=300, height = 7, width = 7, unit = 'in')
+
+```
+###  .
+### Genes only
+Search through DEG files to see if any of the target genes are up or downregulated.
+The following gene lists were determined by looking at the GO results from trending down. 
+Myelination: "Plp1", "Tspan2", "Pllp", "Mag", "Cldn11", "Cldn5", "Fa2h", "Tmem163", "Ugt8a", "Klf15", "Hapln2", "Gfap", "Zcchc24", "Tspo", "Pmp22"
+Gliogenesis: "Opalin", "Plp1", "Cnp", "Tspan2", "Mag", "Fa2h", "Cnp", "Ncan", "Gjc2", "Rras2"
+Neurogenesis: "Mag", "Ncan", "Gjc2", "Kdr", "Sema6a", "Sgk1", "Hapln2", "Daam2", "Gfap", "Zcchc24", "Tspo"
+
+
+```{r}
+
+gene_list <- c("Mag", "Ncan", "Gjc2", "Kdr", "Sema6a", "Sgk1", "Hapln2", "Daam2", "Gfap", "Zcchc24", "Tspo", "Opalin", "Plp1", "Tspan2", "Mag", "Cnp", "Rras2",  "Pllp", "Cldn11", "Cldn5", "Fa2h", "Tmem163", "Ugt8a", "Klf15", "Pmp22")
+
+print("MGN gene list:")
+print(gene_list)
+for (br in cluster_list) {
+    #load the DEG file
+    common_name <- paste0(br, "_Aged_DEG_Down_FindMarker.csv")
+    file_name <- read.csv(common_name)
+    print(paste0("Working on ", common_name))
+    
+    # Check for genes in `formatted_words` that are present in the DEG file
+    matching_genes <- file_name[file_name$gene %in% gene_list, ]
+    
+    # Print the genes that were found
+    if (nrow(matching_genes) > 0) {
+        print("Genes found:")
+        print(matching_genes$gene)
+    } else {
+        print("No matching genes found.")
+    }
+}
+
+```
+###Genes - Trending down
+  ./fixed_data/Fixed-trend/Fixed-trend/
+```{r}
+gene_list <- c("Mag", "Ncan", "Gjc2", "Kdr", "Sema6a", "Sgk1", "Hapln2", "Daam2", "Gfap", "Zcchc24", "Tspo", "Opalin", "Plp1", "Tspan2", "Mag", "Cnp", "Rras2",  "Pllp", "Cldn11", "Cldn5", "Fa2h", "Tmem163", "Ugt8a", "Klf15", "Pmp22")
+
+workpath = "./fixed_data/Fixed-trend/Fixed-trend/"
+
+print("MGN gene list:")
+print(gene_list)
+for (br in cluster_list) {
+    #load the DEG file
+    common_name <- paste0(br, "_trend_down_aged.csv")
+    full_path <- paste0(workpath, common_name)
+    file_name <- read.csv(full_path)
+    print(paste0("Working on ", common_name))
+    
+    # Check for genes in `formatted_words` that are present in the DEG file
+    matching_genes <- file_name[file_name$gene %in% gene_list, ]
+    
+    # Print the genes that were found
+    if (nrow(matching_genes) > 0) {
+        print("Genes found:")
+        print(matching_genes$gene)
+    } else {
+        print("No matching genes found.")
+    }
+}
+
+
+```
+
+
+#Genes in Common
+
+
+```{r}
+hippocampus_genes <- read.csv("./fixed_data/nov/Hippocampus_p21_DEG_FindMarker.csv")
+cortex_genes <- read.csv("./fixed_data/nov/Cortex_p21_DEG_FindMarker.csv")
+thalamus_genes <- read.csv("./fixed_data/nov/Thalamus_p21_DEG_FindMarker.csv")
+
+# Extract the 'gene' columns from each data frame
+hippocampus_gene_list <- hippocampus_genes$gene
+cortex_gene_list <- cortex_genes$gene
+thalamus_gene_list <- thalamus_genes$gene
+
+# Find the common genes in all three lists
+common_genes <- Reduce(intersect, list(
+  hippocampus_gene_list
+  ,   cortex_gene_list
+  ,   thalamus_gene_list
+  ))
+
+# Print the result
+print(common_genes)
+
+
+```
+
+
+### .
+### Violin Plots (Supp Figures)
+
+
+
+
+```{r}
+VlnPlot(object = merge.obj, 
+        group.by = 'orig.ident',
+        features = 'nFeature_Spatial',
+        pt.size = 0)
+ggsave('./Figures/vln_nfeature_1101.tiff', dpi =300, width = 7, height = 7, unit = 'in')
+
+
+VlnPlot(object = merge.obj, 
+        group.by = 'orig.ident',
+        features = 'nCount_Spatial',
+        pt.size = 0)
+ggsave('./Figures/vln_nCount_1101.tiff', dpi =300, width = 7, height = 7, unit = 'in')
+```
+
+
+
+
+###  .
+### DEGs - Aged vs adult - All DEGs
+Up and downregulated together. 
+
+```{r}
+# merge.obj.marker <- FindAllMarkers(merge.obj, only.pos = TRUE, min.pct = 0.5, logfc.threshold = 0.25)
+
+merge.obj$age <- 0
+merge.obj$age[merge.obj$orig.ident %in% c("P21_1","P21_2")] <- "P21"
+merge.obj$age[merge.obj$orig.ident %in% c("adult_1","adult_2")] <- "Adult"
+merge.obj$age[merge.obj$orig.ident %in% c("aged_1","aged_2")] <- "Aged"
+
+cluster_list = c("Cortex", "Hippocampus", "Thalamus", "Hypothalamus", "Striatum")
+
+#Loop to get aged vs. adult DEGs for each brain region
+for(br in cluster_list){
+      temp.obj <- subset(merge.obj, anatomy.v2==br)
+marker <- FindMarkers(temp.obj,
+                      ident.1 = "Aged", ident.2 = "Adult",
+                      group.by = 'age'
+                      )
+      
+      marker$brain.region <- br
+      
+      marker$gene <- rownames(marker)
+
+      marker <- marker %>%
+        dplyr::filter(p_val_adj < 0.05, abs(avg_log2FC) > 1.5,pct.1 > 0.1, pct.2 > 0.1) # all together
+  
+      assign(paste(br,".Aged.deg.AM",sep = "."), marker)
+      csv_filename <- paste0(br, "_Aged_DEG_FindMarker_all.csv")
+      write.csv(marker, file = csv_filename, row.names = FALSE)
+}
+
+
+```
+### DEGs - Aged - only down
+
+
+```{r}
+# merge.obj.marker <- FindAllMarkers(merge.obj, only.pos = TRUE, min.pct = 0.5, logfc.threshold = 0.25)
+
+merge.obj$age <- 0
+merge.obj$age[merge.obj$orig.ident %in% c("P21_1","P21_2")] <- "P21"
+merge.obj$age[merge.obj$orig.ident %in% c("adult_1","adult_2")] <- "Adult"
+merge.obj$age[merge.obj$orig.ident %in% c("aged_1","aged_2")] <- "Aged"
+
+cluster_list = c("Cortex", "Hippocampus", "Thalamus", "Hypothalamus", "Striatum")
+
+#Loop to get aged vs. adult DEGs for each brain region
+for(br in cluster_list){
+      temp.obj <- subset(merge.obj, idents=br)
+marker <- FindMarkers(temp.obj,
+                      ident.1 = "Aged", ident.2 = "Adult",
+                      group.by = 'age'
+                      )
+      
+      marker$brain.region <- br
+      
+      marker$gene <- rownames(marker)
+
+      marker <- marker %>%
+        dplyr::filter(p_val_adj < 0.05, avg_log2FC < log2(1.5)) # only down
+  
+      assign(paste(br,".Aged.down.deg",sep = "."), marker)
+      csv_filename <- paste0(br, "_Aged_DEG_Down_FindMarker.csv")
+      write.csv(marker, file = csv_filename, row.names = FALSE)
+}
+```
+### DEGs - Aged vs adult - only up
+Upregulated only. 
+
+```{r}
+
+# This was run above and only needs to run once 
+# merge.obj$age <- 0
+# merge.obj$age[merge.obj$orig.ident %in% c("P21_1","P21_2")] <- "P21"
+# merge.obj$age[merge.obj$orig.ident %in% c("adult_1","adult_2")] <- "Adult"
+# merge.obj$age[merge.obj$orig.ident %in% c("aged_1","aged_2")] <- "Aged"
+
+cluster_list = c("Cortex", "Hippocampus", "Thalamus", "Hypothalamus", "Striatum")
+
+#Loop to get Aged vs. adult DEGs for each brain region
+for(br in cluster_list){
+      temp.obj <- subset(merge.obj, idents=br)
+marker <- FindMarkers(temp.obj,
+                      ident.1 = "Aged", ident.2 = "Adult",
+                      group.by = 'age'
+                      )
+      
+      marker$brain.region <- br
+      
+      marker$gene <- rownames(marker)
+
+      marker <- marker %>%
+        dplyr::filter(p_val_adj < 0.05, avg_log2FC > log2(1.5)) #only up
+  
+      assign(paste(br,"Aged.up.deg",sep = "."), marker)
+      #csv_filename <- paste0(br, "_Aged_DEG_UP_FindMarker.csv")
+      #write.csv(marker, file = csv_filename, row.names = FALSE)
+}
+
+
+```
+###GO - Aged vs. adult
+
+
+```{r}
+
+
+cluster_list = c("Cortex", "Hippocampus", "Thalamus", "Hypothalamus", "Striatum")
+
+for (br in cluster_list) {
+    common_name <- paste0(br, ".deg")
+    get_common_name <- get(common_name)
+    eg <- bitr(rownames(get_common_name), fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Mm.eg.db")
+  
+    ego <- enrichGO(
+      gene = eg$ENTREZID,  
+      OrgDb = org.Mm.eg.db, 
+      ont = "BP", 
+      pAdjustMethod = "BH", 
+      pvalueCutoff = 0.05, 
+      qvalueCutoff = 0.05, 
+      readable = TRUE
+    )
+    assign(paste(br,"ego",sep = "."), ego)
+    csv_filename <- paste0(br, "_EGO_Aged_fixed.csv")
+    write.csv(ego, file = csv_filename, row.names = FALSE)
+    
+}
+
+```
+### Aged - Heatmap of DEGs related to myelination, gliogenesis, and/or neurogenesis
+
+
+
+```{r}
+
+# Define the brain regions list
+brain_regions <- c("Cortex", "Hippocampus", "Thalamus", "Hypothalamus", "Striatum")
+
+# Initialize an empty list to store data for each region
+EGO_data <- list()
+
+# Loop through each brain region to load data
+for (region in brain_regions) {
+  # Create the file path dynamically
+  file_path <- paste0("C:/Users/Spouse/Documents/Research/Xie/MouseDevelopment/fixed_data/nov/", region, "_EGO_Aged_fixed_1101_b.csv")
+  
+  # Read the CSV file and add it to the list, with a new column for the region name
+  EGO_data[[region]] <- read.csv(file_path) %>%
+    mutate(Region = region)  # Add a column to identify the region
+}
+
+# Combine all data frames in the list into a single data frame
+EGO_df <- bind_rows(EGO_data)
+
+#Create a new column -log(p_val_adj)
+EGO_df <- EGO_df %>%
+  mutate(neg_log_p.adj = -log(p.adjust))
+
+region_order <- c("Cortex", "Hippocampus", "Hypothalamus", "Thalamus", "Striatum")
+
+# Ensure the 'Region' column in down_trends_df is a factor with the specified order
+EGO_df$Region <- factor(EGO_df$Region, levels = region_order)
+
+# Subset with only the GO terms of interest
+# ALL 3 - Myelination, Gliogenesis, Neurogenesis
+subset_EGO_df <- EGO_df %>%
+  filter(Description %in% c("myelination", "ensheathment of neurons", "axon ensheathment",  #myelination
+                            "gliogenesis", "oligodendrocyte differentiation", "glial cell differentiation", "glial cell development", #gliogenesis
+                            "regulation of neurogenesis", "neuroblast proliferation", "positive regulation of neurogenesis", "negative regulation of neurogenesis", "negative regulation of nervous system development", "regulation of axonogenesis", "neuron apoptotic process", "neuron fate determination", "regulation of transmission of nerve impulse"
+                            #"central nervous system myelination", "axon ensheathment in central nervous system", "myelin assembly", 
+ #neurogenesis
+))
+# 
+# #Subset with only the GO terms of interest
+# # ONLY neurogenesis
+# subset_EGO_df <- EGO_df %>%
+#   filter(Description %in% c("regulation of neurogenesis", "neuroblast proliferation", "positive regulation of neurogenesis", "negative regulation of neurogenesis", "negative regulation of nervous system development", "regulation of axonogenesis"
+#  #neurogenesis
+# ))
+
+
+# 
+# 
+#can also look at the top 20 terms by -log(p.adj)
+top20_data <- EGO_df %>%
+  arrange(desc(neg_log_p.adj)) %>%
+  slice_head(n = 20)
+
+# Create the heatmap - Fold
+
+# ggplot(subset_EGO_df, aes(x = Region, y = Description, fill = FoldEnrichment)) +
+#   geom_tile(color = "white") +
+#   scale_fill_gradient(low = "lightblue", high = "darkblue", name = "FoldEnrichment") +
+#   labs(title = "Enriched Pathways by FoldEnrichment and Cluster",
+#        x = "Cluster",
+#        y = "Pathway") +
+#   theme_minimal() +
+#   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+# 
+# ggsave('./Figures/heatmap_Aged_FoldEnrichment_MGN_1105.tiff', dpi=300, height = 7, width = 7, unit = 'in')
+
+
+# pval
+# 
+ggplot(subset_EGO_df, aes(x = Region, y = Description, fill = neg_log_p.adj)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "lightblue", high = "darkblue", name = "-log(p.adj)") +
+  labs(title = "Enriched Pathways by -log(p.adj)",
+       x = "Cluster",
+       y = "Pathway") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggsave('./Figures/heatmap_p21_neglogpadj_MGN_1112.tiff', dpi=300, height = 7, width = 7, unit = 'in')
+
+# top 20 - p.adj
+
+ggplot(top20_data, aes(x = Region, y = Description, fill = neg_log_p.adj)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "lightblue", high = "darkblue", name = "-log(p.adj)") +
+  labs(title = "Top 20 Enriched Pathways by -log(p.adj)",
+       x = "Cluster",
+       y = "Pathway") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# ggsave('./Figures/heatmap_Aged_top20_111224.tiff', dpi=300, height = 7, width = 7, unit = 'in')
+# 
+# # top20 - Fold enrich
+# ggplot(top20_data, aes(x = Region, y = Description, fill = FoldEnrichment)) +
+#   geom_tile(color = "white") +
+#   scale_fill_gradient(low = "lightblue", high = "darkblue", name = "FoldEnrichment") +
+#   labs(title = "Top 20 Enriched Pathways by FoldEnrichment",
+#        x = "Cluster",
+#        y = "Pathway") +
+#   theme_minimal() +
+#   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+# 
+# ggsave('./Figures/heatmap_p21_top20_foldenrich_1535.tiff', dpi=300, height = 7, width = 7, unit = 'in')
+
+```
+### Top 5 Aged GO terms by region
+
+```{r}
+# Define the brain regions list
+brain_regions <- c("Cortex", "Hippocampus", "Thalamus", "Hypothalamus", "Striatum")
+
+# Loop through each brain region to load data
+for (region in brain_regions) {
+  # Create the file path dynamically
+  file_path <- paste0("C:/Users/Spouse/Documents/Research/Xie/MouseDevelopment/fixed_data/nov/", region, "_EGO_Aged_fixed.csv")
+ 
+  temp_name <- paste0(region, "_EGO_Aged")
+   
+  # Read the CSV file and add it to the list, with a new column for the region name
+  temporary_file <- read.csv(file_path) %>%
+    mutate(Region = region)  # Add a column to identify the region
+  
+  # Add a column for -neg log p value
+  temporary_file <- temporary_file %>%
+  mutate(neg_log_p.adj = -log(p.adjust))
+  
+  assign(temp_name, temporary_file)
+  
+}
+
+#initialize new object to hold all 5 regions' data
+top_EGO_terms <- list()
+
+#Take the top 5 by neg log p value and put them into a new obj
+for (region in brain_regions) {
+  temp_name <- paste0(region, "_EGO_Aged")
+  temp_data <- get(temp_name)
+  temp_top <- temp_data %>%
+  arrange(desc(neg_log_p.adj)) %>%
+  slice_head(n = 5)
+  top_EGO_terms <- bind_rows(top_EGO_terms, temp_top)
+}
+
+#Ensure consistent x-axis printing across figures by setting the region_order
+region_order <- c("Cortex", "Hippocampus", "Hypothalamus", "Thalamus", "Striatum")
+top_EGO_terms$Region <- factor(top_EGO_terms$Region, levels = region_order)
+
+
+#We want to graph all the shared terms together at the top. So count the number of times each Description appears to determine if it is or is not shared. 
+
+top_EGO_terms <- top_EGO_terms %>%
+  group_by(Description) %>%
+  mutate(Description_Count = n()) %>%
+  ungroup()
+
+top_EGO_terms <- top_EGO_terms %>%
+  arrange(
+    desc(Description_Count),
+    if_else(Description_Count == 1, as.numeric(Region), 0),
+    desc(neg_log_p.adj)
+  )
+
+# Create a combined sorting column that respects the sorting order
+top_EGO_terms$Description_Order <- factor(top_EGO_terms$Description,
+                                          levels = rev(unique(top_EGO_terms$Description)))
+
+# Ensure 'Region' is a factor with the specified order
+top_EGO_terms$Region <- factor(top_EGO_terms$Region, levels = region_order)
+
+# Plot the heatmap using the combined sorting column
+ggplot(top_EGO_terms, aes(x = Region, y = Description_Order, fill = neg_log_p.adj)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "lightblue", high = "darkblue", name = "-log(p.adj)") +
+  labs(title = "Top Enriched Pathways by -log(p.adj)",
+       x = "Region",
+       y = "Pathway") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggsave('./Figures/new_heatmap/top_Aged_heatmap.tiff', dpi =300, width = 7, height = 7, unit = 'in')
+
+
+```
+
+### Top5 P21 Heatmap 
+
+
+```{r}
+# Define the brain regions list
+brain_regions <- c("Cortex", "Hippocampus", "Thalamus", "Hypothalamus", "Striatum")
+
+# Loop through each brain region to load data
+for (region in brain_regions) {
+  # Create the file path dynamically
+  file_path <- paste0("C:/Users/Spouse/Documents/Research/Xie/MouseDevelopment/", region, "_EGO_Aged_Down_fixed.csv") #Up only
+ 
+  temp_name <- paste0(region, "_EGO_Aged_Down")
+   
+  # Read the CSV file and add it to the list, with a new column for the region name
+  temporary_file <- read.csv(file_path) %>%
+    mutate(Region = region)  # Add a column to identify the region
+  
+  # Add a column for -neg log p value
+  temporary_file <- temporary_file %>%
+  mutate(neg_log_p.adj = -log(p.adjust))
+  
+  assign(temp_name, temporary_file)
+  
+}
+
+#initialize new object to hold all 5 regions' data
+top_EGO_terms <- list()
+
+#Take the top 5 by neg log p value and put them into a new obj
+for (region in brain_regions) {
+  temp_name <- paste0(region,"_EGO_Aged_Down")
+  temp_data <- get(temp_name)
+  temp_top <- temp_data %>%
+  arrange(desc(neg_log_p.adj)) %>%
+  slice_head(n = 5)
+  top_EGO_terms <- bind_rows(top_EGO_terms, temp_top)
+}
+
+#Ensure consistent x-axis printing across figures by setting the region_order
+region_order <- c("Cortex", "Hippocampus", "Hypothalamus", "Thalamus", "Striatum")
+top_EGO_terms$Region <- factor(top_EGO_terms$Region, levels = region_order)
+
+
+#We want to graph all the shared terms together at the top. So count the number of times each Description appears to determine if it is or is not shared. 
+
+top_EGO_terms <- top_EGO_terms %>%
+  group_by(Description) %>%
+  mutate(Description_Count = n()) %>%
+  ungroup()
+
+top_EGO_terms <- top_EGO_terms %>%
+  arrange(
+    desc(Description_Count),
+    if_else(Description_Count == 1, as.numeric(Region), 0),
+    desc(neg_log_p.adj)
+  )
+
+# Create a combined sorting column that respects the sorting order
+top_EGO_terms$Description_Order <- factor(top_EGO_terms$Description,
+                                          levels = rev(unique(top_EGO_terms$Description)))
+
+# Ensure 'Region' is a factor with the specified order
+top_EGO_terms$Region <- factor(top_EGO_terms$Region, levels = region_order)
+
+# Plot the heatmap using the combined sorting column
+ggplot(top_EGO_terms, aes(x = Region, y = Description_Order, fill = neg_log_p.adj)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "lightblue", high = "darkblue", name = "-log(p.adj)") +
+  labs(title = "Top Enriched Pathways by -log(p.adj)",
+       x = "Region",
+       y = "Pathway") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggsave('./Figures/new_heatmap/top_Aged_heatmap_down_5.tiff', dpi =300, width = 7, height = 7, unit = 'in')
+
+```
+
+### .
+### Shared P21 DEGs Heatmap
+
+```{r}
+# First load the data
+
+# Define the brain regions list
+brain_regions <- c("Cortex", "Hippocampus", "Thalamus", "Hypothalamus", "Striatum")
+
+# Loop through each brain region to load data
+for (region in brain_regions) {
+  # Create the file path dynamically
+  file_path <- paste0("C:/Users/Spouse/Documents/Research/Xie/MouseDevelopment/fixed_data/nov/", region, "_p21_DEG_FindMarker.csv")
+ 
+  temp_name <- paste0(region, "_DEG_P21")
+   
+  # Read the CSV file and add it to the list, with a new column for the region name
+  temporary_file <- read.csv(file_path) %>%
+    mutate(Region = region)  # Add a column to identify the region
+  
+  # Create an object in R with this region's DEGs
+  assign(temp_name, temporary_file)
+  
+}
+
+# Create an intersection of the genes common to all regions
+P21_shared_genes <- Reduce(intersect, list(Cortex_DEG_P21$gene, 
+                                       Hippocampus_DEG_P21$gene, 
+                                       Hypothalamus_DEG_P21$gene,
+                                       Thalamus_DEG_P21$gene,
+                                       Striatum_DEG_P21$gene))
+
+
+```
+### P21 Venn
+
+```{r}
+library(grid)
+library(VennDiagram)
+
+# Create a Venn diagram for gene overlap
+venn.plot <- venn.diagram(
+  x = list(
+    Cortex = Cortex_DEG_P21$gene,
+    Hippocampus = Hippocampus_DEG_P21$gene,
+    Hypothalamus = Hypothalamus_DEG_P21$gene,
+    Thalamus = Thalamus_DEG_P21$gene,
+    Striatum = Striatum_DEG_P21$gene
+  ),
+  category.names = c("Cortex", "Hippocampus", "Hypothalamus", "Thalamus", "Striatum"),
+  cex = 1.5, # Size of the numbers inside the diagram
+  filename = NULL, 
+  output = TRUE
+)
+
+grid.draw(venn.plot)
+png("./Figures/new_heatmap/venn_diagram.png", width = 800, height = 800)
+grid.draw(venn.plot)
+dev.off()
+```
+### Shared Aged 
+
+```{r}
+# First load the data
+
+# Define the brain regions list
+brain_regions <- c("Cortex", "Hippocampus", "Thalamus", "Hypothalamus", "Striatum")
+
+# Loop through each brain region to load data
+for (region in brain_regions) {
+  # Create the file path dynamically
+  file_path <- paste0("C:/Users/Spouse/Documents/Research/Xie/MouseDevelopment/fixed_data/nov/", region, "_Aged_DEG_FindMarker.csv")
+ 
+  temp_name <- paste0(region, "_DEG_Aged")
+   
+  # Read the CSV file and add it to the list, with a new column for the region name
+  temporary_file <- read.csv(file_path) %>%
+    mutate(Region = region)  # Add a column to identify the region
+  
+  # Create an object in R with this region's DEGs
+  assign(temp_name, temporary_file)
+  
+}
+
+# Create an intersection of the genes common to all regions
+Aged_shared_genes <- Reduce(intersect, list(Cortex_DEG_Aged$gene, 
+                                       Hippocampus_DEG_Aged$gene, 
+                                       Hypothalamus_DEG_Aged$gene,
+                                       Thalamus_DEG_Aged$gene,
+                                       Striatum_DEG_Aged$gene))
+
+```
+
+### Aged Venn
+
+```{r}
+library(grid)
+library(VennDiagram)
+
+# Create a Venn diagram for gene overlap
+venn.plot <- venn.diagram(
+  x = list(
+    Cortex = Cortex_DEG_Aged$gene,
+    Hippocampus = Hippocampus_DEG_Aged$gene,
+    Hypothalamus = Hypothalamus_DEG_Aged$gene,
+    Thalamus = Thalamus_DEG_Aged$gene,
+    Striatum = Striatum_DEG_Aged$gene
+  ),
+  category.names = c("Cortex", "Hippocampus", "Hypothalamus", "Thalamus", "Striatum"),
+  filename = NULL, 
+  output = TRUE
+)
+
+grid.draw(venn.plot)
+png("./Figures/new_heatmap/Aged_venn_diagram.png", width = 800, height = 800)
+grid.draw(venn.plot)
+dev.off()
+```
+### . 
+### Load the data straight from Ben - p21 & aged
+
+
+```{r}
+#These are just lists of genes but I can't see the p-values
+P21_DEG_UP <- readRDS("./fixed_data/fixed_p21_byCluster_up.rds")
+P21_DEG_Down <- readRDS("./fixed_data/fixed_p21_byCluster_down.rds")
+Aged_DEG_UP <- readRDS("./fixed_data/fixed_Aged_byCluster_up.rds")
+Aged_DEG_Down <- readRDS("./fixed_data/fixed_Aged_byCluster_down.rds")
+
+
+load_fixed_DEG_results <- readRDS("./fixed_data/fixed_DEG_results.rds")
+#note this has not filtered for adjusted p-value, so let's do that
+
+fixed_DEG_results <- lapply(load_fixed_DEG_results, function(df) {
+  df %>% filter(p_val_adj < 0.05)
+})
+
+
+
+
+###################################################
+#Join up and down - P21
+library(purrr)
+
+#convert to data frames in order to join
+P21_DEG_UP <- map(P21_DEG_UP, ~ if (is.character(.x)) data.frame(gene = .x) else .x) 
+P21_DEG_Down <- map(P21_DEG_Down, ~ if (is.character(.x)) data.frame(gene = .x) else .x)
+
+#Joined dataframe
+combined_P21_DEG <- map2(
+  P21_DEG_UP, 
+  P21_DEG_Down, 
+  ~full_join(.x, .y, by = "gene", suffix = c("_up", "_down"))
+)
+
+#Let's check the intersection for P21 DEGs in the cortex between the combined_P21_DEG Cortex list and the fixed_DEG_results file
+
+rows_Cortex_P21 <-rownames(fixed_DEG_results$Cortex_adult_vs_P21)
+check_cortex <- intersect(rows_Cortex_P21, combined_P21_DEG$Cortex_adult_vs_P21$gene)
+#Combined up and down from Ben's data on the server - 2289
+#genes found in both the filtered DEG list and Ben's data - 354
+
+#Let's generate a new data set that only contains the significant DEGs
+brain_regions <- c("Cortex", "Hippocampus", "Hypothalamus", "Thalamus", "Striatum")
+p21_significant_DEGs <- list()
+
+for (region in brain_regions) {
+  # Construct the names of the dataframes dynamically using the brain region
+  fixed_DEG_df <- fixed_DEG_results[[paste0(region, "_adult_vs_P21")]]  
+  P21_DEG_df <- combined_P21_DEG[[paste0(region, "_adult_vs_P21")]]  
+  
+  # Extract row names from the fixed DEG dataframe
+  rows_region <- rownames(fixed_DEG_df)
+ 
+  # Find the intersection between the row names and the Aged_DEG values
+  region_intersection <- intersect(rows_region, P21_DEG_df$gene)
+  
+  # Store the result in the intersections list
+  p21_significant_DEGs[[region]] <- region_intersection
+}
+
+# Find the intersection of items within each of the 5 lists in combined_P21
+shared_P21_sig <- Reduce(intersect, list(
+  p21_significant_DEGs$Cortex,
+  p21_significant_DEGs$Hippocampus,
+  p21_significant_DEGs$Hypothalamus,
+  p21_significant_DEGs$Thalamus,
+  p21_significant_DEGs$Striatum
+))
+
+##############################################
+#Join up and down - Aged
+library(purrr)
+
+#convert to data frames in order to join
+Aged_DEG_UP <- map(Aged_DEG_UP, ~ if (is.character(.x)) data.frame(gene = .x) else .x)
+Aged_DEG_Down <- map(Aged_DEG_Down, ~ if (is.character(.x)) data.frame(gene = .x) else .x)
+
+#Joined dataframe
+combined_Aged_DEG <- map2(
+  Aged_DEG_UP, 
+  Aged_DEG_Down, 
+  ~full_join(.x, .y, by = "gene", suffix = c("_up", "_down"))
+)
+
+# Find the intersection of items within each of the 5 lists in Aged_DEG_UP
+shared_Aged_Ben <- Reduce(intersect, list(
+  combined_Aged_DEG$Cortex_adult_vs_aged$gene,
+  combined_Aged_DEG$Hippocampus_adult_vs_aged$gene,
+  combined_Aged_DEG$Hypothalamus_adult_vs_aged$gene,
+  combined_Aged_DEG$Thalamus_adult_vs_aged$gene,
+  combined_Aged_DEG$Striatum_adult_vs_aged$gene
+))
+
+```
+#New Venn P21
+
+```{r}
+venn.plot <- venn.diagram(
+  x = list(
+    Cortex = shared_P21_sig$Cortex,
+    Hippocampus = shared_P21_sig$Hippocampus,
+    Hypothalamus = shared_P21_sig$Hypothalamus,
+    Thalamus = shared_P21_sig$Thalamus,
+    Striatum = shared_P21_sig$Striatum
+  ),
+  category.names = c("Cortex", "Hippocampus", "Hypothalamus", "Thalamus", "Striatum"),
+  filename = NULL, 
+  output = TRUE,
+  fill = c("lightblue", "lightgreen", "lightpink", "lightyellow", "lightcoral"), # Custom fill colors for sets
+#  cat.col = c("blue", "green", "pink", "orange", "red"), # Custom category label colors
+  alpha = 0.5, # Transparency level of the fills
+  cat.cex = 2, # Size of the category labels
+  cex = 1.5, # Size of the numbers inside the diagram
+  lwd = 2 # Line width of the Venn diagram borders
+)
+
+grid.draw(venn.plot)
+png("./Figures/new_heatmap/P21_venn_diagram_Ben.png", width = 800, height = 800)
+grid.draw(venn.plot)
+dev.off()
+```
+
+#New Venn Aged
+
+```{r}
+venn.plot <- venn.diagram(
+  x = list(
+    Cortex = Cortex_DEG_Aged$gene,
+    Hippocampus = Hippocampus_DEG_Aged$gene,
+    Hypothalamus = Hypothalamus_DEG_Aged$gene,
+    Thalamus = Thalamus_DEG_Aged$gene,
+    Striatum = Striatum_DEG_Aged$gene
+  ),
+  category.names = c("Cortex", "Hippocampus", "Hypothalamus", "Thalamus", "Striatum"),
+  filename = NULL, 
+  output = TRUE,
+  fill = c("lightblue", "lightgreen", "lightpink", "lightyellow", "lightcoral"), # Custom fill colors for sets
+#  cat.col = c("blue", "green", "pink", "orange", "red"), # Custom category label colors
+  alpha = 0.5, # Transparency level of the fills
+  cat.cex = 2, # Size of the category labels
+  cex = 1.5, # Size of the numbers inside the diagram
+  lwd = 2 # Line width of the Venn diagram borders
+)
+
+grid.draw(venn.plot)
+png("./Figures/new_heatmap/Aged_venn_diagram_Ben.png", width = 800, height = 800)
+grid.draw(venn.plot)
+dev.off()
+```
+
+### ggvenn
+
+```{r}
+library(ggvenn)
+
+# Create a list of data for the Venn diagram
+venn_data <- list(
+  Cortex = Cortex_DEG_P21$gene,
+  Hippocampus = Hippocampus_DEG_P21$gene,
+  Hypothalamus = Hypothalamus_DEG_P21$gene,
+  Thalamus = Thalamus_DEG_P21$gene,
+  Striatum = Striatum_DEG_P21$gene
+)
+
+# Generate the Venn plot
+venn_plot <- ggvenn(
+  venn_data,
+  fill_color = c("lightblue", "lightgreen", "lightpink", "lightyellow", "lightcoral"), # Custom colors
+  stroke_size = 0.5, # Border size for the circles
+  set_name_size = 5 # Size of the category labels
+)
+
+# Customize the font size of the numbers using ggplot2 functions
+venn_plot + theme(
+  plot.title = element_text(size = 14),
+  plot.subtitle = element_text(size = 12),
+  plot.caption = element_text(size = 10),
+  text = element_text(size = 5) # Adjust size for numbers inside the Venn diagram
+)
+
+ggsave('./Figures/ggvenn_P21.tiff', dpi =300, width = 7, height = 7, unit = 'in')
+```
+###.
+###ClusterProfiler - EnrichGO
+
+
+```{r}
+
+    ego <- enrichGO(
+      gene = shared_Aged_Ben,
+      keyType = "SYMBOL", 
+      OrgDb = org.Mm.eg.db, 
+      ont = "BP", 
+      pAdjustMethod = "BH", 
+      pvalueCutoff = 0.05, 
+      qvalueCutoff = 0.05, 
+      readable = TRUE
+    )
+    Aged_shared_ego<-ego
+    write.csv(ego, file = "Aged_shared_EGO.csv", row.names = FALSE)
+
+```
+
+###.
+###Trending DEGs
+### Initialize - "flat"
+i.e. those genes not differentially expressed in p21
+& a second set - those not differentially expressed in aged 
+
+```{r}
+#This is a list of all genes
+#This should already be filtered to only contain the top 3000
+
+#First, create a new orig.ident combining samples by age
+merge.obj$age <- 0
+merge.obj$age[merge.obj$orig.ident %in% c("P21_1","P21_2")] <- "P21"
+merge.obj$age[merge.obj$orig.ident %in% c("adult_1","adult_2")] <- "Adult"
+merge.obj$age[merge.obj$orig.ident %in% c("aged_1","aged_2")] <- "Aged"
+
+brain_regions <- c("Cortex", "Hippocampus", "Hypothalamus", "Thalamus", "Striatum")
+
+for(br in brain_regions){
+      temp.obj <- subset(merge.obj, idents=br)
+marker <- FindMarkers(temp.obj,
+                      ident.1 = "P21", ident.2 = "Adult",
+                      group.by = 'age'
+                      )
+      
+      marker$brain.region <- br
+      
+      marker$gene <- rownames(marker)
+
+      marker <- marker %>%
+        dplyr::filter(abs(avg_log2FC) < log2(1.5)) #only not significantly expressed
+  
+      assign(paste("P21",br,"NOTdeg",sep = "."), marker)
+      #csv_filename <- paste0(br, "_Aged_NOTdeg.csv")
+      #write.csv(marker, file = csv_filename, row.names = FALSE)
+}
+
+
+```
+
+###1 - flat-up (not differentially expressed in P21 mice; upregulated in aged mice)
+First go to #Load the data straight from Ben
+
+```{r}
+# All upregulated DEGs in aged mice
+# Aged_DEG_UP
+# intersects with
+# all genes not differentially expressed in P21 mice. 
+trend_1_flat_up<-list()
+
+for (br in brain_regions) {
+  flat_name <- paste0("P21.",br,".NOTdeg")
+  flat_name <- get(flat_name)
+  flat_list <- flat_name$gene
+  aged_deg_list <- Aged_DEG_UP[[paste0(br, "_adult_vs_aged")]]
+  #aged_deg_list <- as.data.frame(aged_deg_list)
+  # Find the intersection between the two lists
+  region_intersection <- intersect(aged_deg_list, flat_list)
+  
+  # Store the result in the trend list
+  trend_1_flat_up[[br]] <- region_intersection
+  #csv_filename <- paste0(br, "_trend1flatup.csv")
+  #write.csv(region_intersection, file = csv_filename, row.names = FALSE)
+}
+```
+###2 - flat-down (not differentially expressed in P21 mice; downregulated in aged mice)
+First go to #Load the data straight from Ben
+
+```{r}
+# All downregulated DEGs in aged mice
+# Aged_DEG_Down
+# intersects with
+# all genes not differentially expressed in P21 mice. 
+trend_2_flat_down<-list()
+
+for (br in brain_regions) {
+  flat_name <- paste0("P21.",br,".NOTdeg")
+  flat_name <- get(flat_name)
+  flat_list <- flat_name$gene
+  aged_deg_list <- Aged_DEG_Down[[paste0(br, "_adult_vs_aged")]]
+  region_intersection <- intersect(aged_deg_list, flat_list)
+  trend_2_flat_down[[br]] <- region_intersection
+  #csv_filename <- paste0(br, "_trend2flatdown.csv")
+  #write.csv(region_intersection, file = csv_filename, row.names = FALSE)
+}
+```
+###3 - up-flat (upregulated in P21 mice; not DEG in aged mice)
+First go to #Load the data straight from Ben
+
+```{r}
+# All downregulated DEGs in aged mice
+# Aged_DEG_Down
+# intersects with
+# all genes not differentially expressed in P21 mice. 
+trend_3_up_flat <-list()
+
+for (br in brain_regions) {
+  flat_name <- paste0("Aged.",br,".NOTdeg")
+  flat_name <- get(flat_name)
+  flat_list <- flat_name$gene
+  deg_list <- P21_DEG_UP[[paste0(br, "_adult_vs_P21")]]
+  region_intersection <- intersect(deg_list, flat_list)
+  trend_3_up_flat[[br]] <- region_intersection
+  #csv_filename <- paste0(br, "_trend3upflat.csv")
+  #write.csv(region_intersection, file = csv_filename, row.names = FALSE)
+}
+```
+###4 - down-flat (downregulated in P21 mice; not DEG in aged mice)
+First go to #Load the data straight from Ben
+
+```{r}
+# not DEGs in aged mice
+# intersects with
+# downregulated in P21 mice. 
+trend_4_down_flat <-list()
+
+for (br in brain_regions) {
+  flat_name <- paste0("Aged.",br,".NOTdeg")
+  flat_name <- get(flat_name)
+  flat_list <- flat_name$gene
+  deg_list <- P21_DEG_Down[[paste0(br, "_adult_vs_P21")]]
+  region_intersection <- intersect(deg_list, flat_list)
+  trend_4_down_flat[[br]] <- region_intersection
+  #csv_filename <- paste0(br, "_trend4downflat.csv")
+  #write.csv(region_intersection, file = csv_filename, row.names = FALSE)
+}
+```
+
+###5 - up-up (upregulated in P21 mice; upregulated in aged mice)
+
+```{r}
+# Intersect each list in Aged_DEG_UP and P21_DEG_UP
+
+#Initialize
+brain_regions <- c("Cortex", "Hippocampus", "Hypothalamus", "Thalamus", "Striatum")
+trend_5_up_up <- list()
+
+# Loop through each brain region
+for (region in brain_regions) {
+  
+  # Construct the names of the datasets dynamically using the brain region
+  aged_deg_list <- Aged_DEG_UP[[paste0(region, "_adult_vs_aged")]] # Aged_DEG_UP list
+  p21_deg_list <- P21_DEG_UP[[paste0(region, "_adult_vs_P21")]]  # P21_DEG_UP list
+  
+  # Find the intersection between the two lists
+  region_intersection <- intersect(aged_deg_list$gene, p21_deg_list$gene)
+  
+  # Store the result in the trend_5_up_up list
+  trend_5_up_up[[region]] <- region_intersection
+  csv_filename <- paste0(region, "_trend5upup.csv")
+  write.csv(region_intersection, file = csv_filename, row.names = FALSE)
+}
+
+```
+
+###6 - down-down (downregulated in P21 mice; downregulated in aged mice)
+
+```{r}
+# Intersect each list in Aged_DEG_UP and P21_DEG_UP
+
+#Initialize
+brain_regions <- c("Cortex", "Hippocampus", "Hypothalamus", "Thalamus", "Striatum")
+trend_6_down_down <- list()
+
+# Loop through each brain region
+for (region in brain_regions) {
+  
+  # Construct the names of the datasets dynamically using the brain region
+  aged_deg_list <- Aged_DEG_Down[[paste0(region, "_adult_vs_aged")]]  # Aged_DEG_Down list
+  p21_deg_list <- P21_DEG_Down[[paste0(region, "_adult_vs_P21")]] # P21_DEG_Down list
+  
+  # Find the intersection between the two lists
+  region_intersection <- intersect(aged_deg_list$gene, p21_deg_list$gene)
+  
+  # Store the result in the trend list
+  trend_6_down_down[[region]] <- region_intersection
+  csv_filename <- paste0(region, "_trend6downdown.csv")
+  write.csv(region_intersection, file = csv_filename, row.names = FALSE)
+}
+
+```
+
+
+###7 - down-up (downregulated in P21 mice; upregulated in aged mice)
+
+```{r}
+# Intersect each list in P21_DEG_Down and Aged_DEG_UP
+
+#Initialize
+brain_regions <- c("Cortex", "Hippocampus", "Hypothalamus", "Thalamus", "Striatum")
+trend_7_down_up <- list()
+
+# Loop through each brain region
+for (region in brain_regions) {
+  
+  # Construct the names of the datasets dynamically using the brain region
+  aged_deg_list <- Aged_DEG_UP[[paste0(region, "_adult_vs_aged")]]  # Aged_DEG_Down list
+  p21_deg_list <- P21_DEG_Down[[paste0(region, "_adult_vs_P21")]]  # P21_DEG_Down list
+  
+  # Find the intersection between the two lists
+  region_intersection <- intersect(aged_deg_list$gene, p21_deg_list$gene)
+  
+  # Store the result in the trend list
+  trend_7_down_up[[region]] <- region_intersection
+  csv_filename <- paste0(region, "_trend7downup.csv")
+  write.csv(region_intersection, file = csv_filename, row.names = FALSE)
+}
+```
+
+
+
+###8 - up-down (upregulated in P21 mice; downregulated in aged mice)
+
+```{r}
+# Intersect each list in P21_DEG_UP and Aged_DEG_Down
+
+#Initialize
+brain_regions <- c("Cortex", "Hippocampus", "Hypothalamus", "Thalamus", "Striatum")
+trend_8_up_down <- list()
+
+# Loop through each brain region
+for (region in brain_regions) {
+  
+  # Construct the names of the datasets dynamically using the brain region
+  p21_deg_list <- P21_DEG_UP[[paste0(region, "_adult_vs_P21")]]
+  aged_deg_list <- Aged_DEG_Down[[paste0(region, "_adult_vs_aged")]] 
+
+  
+  # Find the intersection between the two lists
+  region_intersection <- intersect(aged_deg_list$gene, p21_deg_list$gene)
+  
+  # Store the result in the trend list
+  trend_8_up_down[[region]] <- region_intersection
+  csv_filename <- paste0(region, "_trend8updown.csv")
+  write.csv(region_intersection, file = csv_filename, row.names = FALSE)
+  }
+```
+
+###.
+###Trend Heatmaps
+Let's generate heatmaps for each of the 8 trending datasets and pick the two most impactful. 
+For each heatmap, pick 1-2 genes per brain region. Genes on the x-axis, sample type on the y-axis.
+
+```{r}
+#Each "trend" list is only genes
+#Let's start with trend_8_up_down
+#Take a subset of fixed_DEG_results containing only genes found in the trend list in the _P21 dataframes
+#Make a new list with only the top 2 genes per brain region by log2FoldChange
+#Use this list to generate the heatmap from merge.obj
+
+#Initialize
+brain_regions <- c("Cortex", "Hippocampus", "Hypothalamus", "Thalamus", "Striatum")
+subset_trend_8_up_down <- list()
+top2degs <- list()
+
+for (region in brain_regions) {
+
+  # Construct the name of the dataframe dynamically using the brain region
+  df_name <- paste0(region, "_adult_vs_P21")  
+  
+  # Extract the corresponding dataframe from fixed_DEG_results
+  df <- fixed_DEG_results[[df_name]]
+  df$gene <- rownames(df)
+  
+  # Subset the dataframe to include only rows whose rownames are in trend list
+  df_subset <- df[df$gene %in% trend_8_up_down[[region]], ]
+  
+  # Store the subsetted dataframe in the result list
+  subset_trend_8_up_down[[region]] <- df_subset
+  
+    # Sort the dataframe by avg_log2FC in descending order and get the top 2
+    df_sorted <- df_subset[order(df_subset$avg_log2FC, decreasing = TRUE), ]
+    top2[[region]] <- head(df_sorted, 2)  # Get the top 2 rows with the highest avg_log2FC
+    
+    # Store the result in the top2degs list
+    top2degs[[region]] <- top2
+}
+
+
+DoHeatmap(merge.obj, features = top2degs$gene)+
+  scale_fill_gradientn(colors = c("blue", "white", "red"))
+ggsave('./Figures/new_heatmap/gene_heatmap_top2_trend8.tiff', dpi =300, width = 7, height = 7, unit = 'in')
+```
+### Trend Spatial Feature Plot
+Let's plot a few key genes and see what their spatial feature plots look like
+
+
+```{r}
+#This is an arbitrary subsection to find a good figure while minimizing computation time in drawing figures
+gene_counter <- c(
+"S100a9", "Maff", "Abhd12b", "Prkdc", "Gsn", "Pmch", "Glis3", "Il33", "Ttr", "Zfp60", "Sec11c", "Qdpr", "C4b", "Gfap", "Calr", "Cd9")
+
+#Start of Spatial Feature Plot
+color_scale <- scale_fill_gradientn(
+  limits = c(6000, 90000),  # Set the limits to cover the full range of your data
+  colours = rev(RColorBrewer::brewer.pal(n = 11, name = "Spectral"))  # Use a color palette
+ # Define the breaks for the legend
+)
+
+# Define the pt.size.factor values for each group of samples
+pt_size_factors <- c(730, 730, 3.5, 3.5, 5, 5)
+
+# Get the names of the images
+ident_values <- names(merge.obj@images)
+
+#Not everything needs to be a loop
+#But why not?
+#Let's generate a spatial plot for each of the top trending genes
+for (gene in gene_counter){
+# Create the plots with the specified pt.size.factor values
+plots <- lapply(seq_along(ident_values), function(i) {
+  SpatialFeaturePlot(merge.obj, images = ident_values[i], features=gene, pt.size.factor = pt_size_factors[i]) 
+   #color_scale + 
+  #  theme(legend.position = "none")  # Remove individual legends
+})
+
+# Create a dummy plot to extract the legend
+legend_plot <- SpatialFeaturePlot(merge.obj, features = gene, images = ident_values[1]) + color_scale
+
+# Extract the legend
+legend <- cowplot::get_legend(legend_plot)
+
+# Combine the plots and add the common legend
+combined_plot <- patchwork::wrap_plots(plots, nrow = 1) + 
+  plot_layout(guides = "collect") & 
+  theme(legend.position = "bottom")
+
+# Add the legend to the combined plot
+final_plot <- cowplot::plot_grid(combined_plot, legend, ncol = 1, rel_heights = c(1, 0.1))
+
+# Print the final plot
+print(final_plot)
+  spatial_path <- paste0("./Figures/Spatial_Gene/trend3/",gene, "_heatmap_top_trend3.tiff")
+  ggsave(spatial_path, dpi =300, width = 7, height = 7, unit = 'in') 
+  
+}
+ 
+#SpatialFeaturePlot(merge.obj, features = 'Zfp60', keep.scale = 'feature',max.cutoff = 'q95',pt.size.factor = 4)
+```
+
+### Heatmap -Hippocampus - intialize
+### trend1 hippo
+```{r}
+#From trend 1-8, pull hippocampal data
+#Make a big list
+#Make a heatmap
+
+top_hippo_list <- data.frame() #df so we can factor and ensure proper order in heatmap
+#trend_names = c("trend_1_flat_up", "trend_2_flat_down", "trend_3_up_flat", "trend_4_down_flat", "trend_5_up_up", "trend_6_down_down", "trend_7_down_up", "trend_8_up_down")
+
+#trend1
+#Using variables here so it's easier to change for each trend data set
+
+#use df as the structure with the log2fc we want to use
+#use deg as the gene list to subset the above structure
+df <- Hippocampus.Aged.up.deg
+deg_name <- P21.Hippocampus.NOTdeg$gene
+  
+df_subset <- df[df$gene %in% deg_name, ]
+
+df_sorted <- df_subset[order(df_subset$avg_log2FC, decreasing = TRUE), ]
+
+#We will select more than necessary thru this automated process, then manually remove entries to address overlap (DEG from multiple trend sets leading to too few entries in final figure, which is only for demonstrative purposes) - keeping the old "top2" name to make code easier to maintain
+top2 <- head(df_sorted, 2)
+
+top2$trend <- "trend1" 
+top_hippo_list <- rbind(top_hippo_list, top2)
+remove(top2) #to aid in code reusability
+##
+
+#trend2
+
+df <- Hippocampus..Aged.down.deg
+deg_name <- P21.Hippocampus.NOTdeg$gene
+  
+df_subset <- df[df$gene %in% deg_name, ]
+
+df_sorted <- df_subset[order(df_subset$avg_log2FC, decreasing = TRUE), ]
+
+top2 <- tail(df_sorted, 2) 
+
+top2$trend <- "trend2" 
+top_hippo_list <- rbind(top_hippo_list, top2)
+remove(top2)
+
+#trend3 - up flat
+
+df <- Hippocampus.P21.up.deg
+deg_name <- Aged.Hippocampus.NOTdeg$gene
+  
+df_subset <- df[df$gene %in% up_name, ]
+
+df_sorted <- df_subset[order(df_subset$avg_log2FC, decreasing = TRUE), ]
+
+top2 <- head(df_sorted, 2)  
+top2$trend <- "trend3" 
+top_hippo_list <- rbind(top_hippo_list, top2)
+remove(top2)
+
+#trend4 - down flat
+
+df <- Hippocampus.P21.down.deg
+deg_name <- Aged.Hippocampus.NOTdeg$gene
+  
+df_subset <- df[df$gene %in% deg_name, ]
+
+df_sorted <- df_subset[order(df_subset$avg_log2FC, decreasing = TRUE), ]
+
+top2 <- tail(df_sorted, 2)
+top2$trend <- "trend4" 
+top_hippo_list <- rbind(top_hippo_list, top2)
+remove(top2)
+
+#trend5 - up up
+
+p21_up_hippo <- Hippocampus.P21.deg%>%
+        dplyr::filter(avg_log2FC > log2(1.5)) 
+
+up_up <- Hippocampus.Aged.up.deg %>%
+  filter(gene %in% p21_up_hippo$gene)
+#This isn't perfect
+#It's using the log2FC for the Aged dataset
+
+up_up <- up_up[order(up_up$avg_log2FC, decreasing = TRUE), ]
+
+top2 <- head(up_up, 2)
+top2$trend <- "trend5" 
+top_hippo_list <- rbind(top_hippo_list, top2)
+remove(top2)
+
+#trend6 - down down
+
+p21_down_hippo <- Hippocampus.P21.deg%>%
+        dplyr::filter(avg_log2FC < log2(1.5)) 
+
+down_down <- Hippocampus..Aged.down.deg %>%
+  filter(gene %in% p21_down_hippo$gene)
+#This isn't perfect
+#It's using the log2FC for the Aged dataset
+#But this is just for a demonstrative figure
+
+down_down <- down_down[order(down_down$avg_log2FC, decreasing = TRUE), ]
+
+top2 <- tail(down_down, 2)
+top2$trend <- "trend6" 
+top_hippo_list <- rbind(top_hippo_list, top2)
+remove(top2)
+
+#trend7 - down up
+
+p21_down_hippo <- Hippocampus.P21.deg%>%
+        dplyr::filter(avg_log2FC < log2(1.5)) 
+
+down_up <- Hippocampus.Aged.up.deg %>%
+  filter(gene %in% p21_down_hippo$gene)
+
+down_up <- down_up[order(down_up$avg_log2FC, decreasing = TRUE), ]
+
+top2 <- head(down_up, 2)
+top2$trend <- "trend7" 
+top_hippo_list <- rbind(top_hippo_list, top2)
+remove(top2)
+
+#trend8 - up down
+
+up_name <- p21_up_hippo$gene
+df <- Hippocampus..Aged.down.deg
+
+df_sorted <- df_subset[order(df_subset$avg_log2FC, decreasing = TRUE), ]
+#This sould be the other way around - keeping the log2fc from the upregulated P21 set
+
+top2 <- head(df_sorted, 2)
+top2$trend <- "trend8" 
+top_hippo_list <- rbind(top_hippo_list, top2)
+remove(top2)
+
+
+top_hippo_list$trend <- factor(top_hippo_list$trend, levels = c("trend1", "trend2", "trend3", "trend4", "trend5", "trend6", "trend7", "trend8"))
+
+
+
+
+#Code to list ALL hippo genes
+hippo_list <- unlist(lapply(trend_names, function(trend_name) {
+  get(trend_name)$Hippocampus
+}), recursive = FALSE)
+#length = 857 - good
+```
+###Hippo Heatmap take2
+```{r}
+library(pheatmap)
+
+#Genes whose names should display in the hippocampus heatmap
+#these are the top 2 for each trend
+highlight_genes <- c("S100a9", "Maff", "Abhd12b", "Prkdc", "Gsn", "Pmch", "Glis3", "Il33", "Ttr", "Zfp60", "Sec11c", "Qdpr", "C4b", "Gfap", "Calr", "Cd9")
+
+#We need to restructure the trend data to filter merge.obj for the heatmap. 
+
+#Initialize
+result_df <- data.frame(gene = character(), trend = character(), stringsAsFactors = FALSE)
+
+trend_lists <- list(trend_1_flat_up, trend_2_flat_down, trend_3_up_flat, trend_4_down_flat, trend_5_up_up, trend_6_down_down, trend_7_down_up, trend_8_up_down)
+
+trend_names <- c("trend_1", "trend_2", "trend_3", "trend_4", "trend_5", "trend_6", "trend_7", "trend_8")
+
+for (i in seq_along(trend_lists)) {
+  trend <- trend_names[i]
+  trend_data <- trend_lists[[i]]
+
+  genes <- trend_data[["Hippocampus"]]
+    
+  temp_df <- data.frame(gene = genes, trend = trend, stringsAsFactors = FALSE)
+    
+  result_df <- rbind(result_df, temp_df)
+  
+}
+
+#Ensure "trend" is a factor so the heatmap renders consistently
+result_df$trend <- factor(result_df$trend, levels = trend_names)
+
+
+ordered_genes <- result_df %>% arrange(trend) %>% pull(gene)
+
+
+avgHM <- averageHeatmap(object = merge.obj,
+               assays = "Spatial",
+               group.by = "orig.ident",
+               markerGene = ordered_genes, #I also tried result_df and the results were similar
+               clusterAnnoName = F,
+               showRowNames = F,
+               markGenes = highlight_genes)
+
+
+png("./Figures/avgHM_hippo_heatmap_111824_b.png", width = 800, height = 800)
+draw(avgHM)
+dev.off()
+
+#Why is this only showing 8 of 15 genes?
+
+
+
+```
+###Failed attempts
+```{r}
+#Failed attempts at heatmaps: 
+###This is completely illegible
+# 
+# # Extract the expression data from merge.obj for the specified genes
+# expression_matrix <- as.matrix(GetAssayData(merge.obj, slot = "data"))
+# expression_matrix_subset <- expression_matrix[rownames(expression_matrix) %in% ordered_genes, ]
+# 
+# # Reorder the rows of the expression matrix to match the order of the genes in result_df
+# expression_matrix_subset <- expression_matrix_subset[ordered_genes, , drop = FALSE]
+# 
+# # Prepare an annotation vector for selectively showing gene names
+# row_annotation <- ifelse(rownames(expression_matrix_subset) %in% highlight_genes, rownames(expression_matrix_subset), "")
+# 
+# # Generate the heatmap
+# pheatmap(
+#   expression_matrix_subset,
+#   cluster_rows = FALSE,     # Do not cluster rows to maintain the given order
+#   cluster_cols = TRUE,      # Adjust clustering as needed for columns
+#   show_rownames = FALSE,    # Do not show all gene names
+#   labels_row = row_annotation # Display only specified gene names
+# )
+############
+library(viridis)
+
+DoHeatmap(
+  merge.obj,
+  group.by = "orig.ident",
+  features = ordered_genes,   #I also tried result_df and the results were similar
+  label = TRUE                
+) +
+ scale_fill_gradientn(colors = viridis::viridis(3, option = "D")) +  
+   scale_y_discrete(labels = function(x) ifelse(x %in% highlight_genes, x, ""))
+ggsave('./Figures/DoHeatmap_111824_hippo_highlighted_genes_optd.tiff', dpi=300, height = 7, width = 7, unit = 'in')
+
+
+# This is illegible
+# DoHeatmap(merge.obj, features = hippo_list$gene, group.by = "orig.ident")+
+#   scale_fill_gradientn(colors = viridis())
+# ggsave('./Figures/new_heatmap/gene_heatmap_top_hippo_updated.tiff', dpi =300, width = 7, height = 7, unit = 'in')
+```
+###.
+###Trend GO
+GO analysis for hippocampal genes in Trends 1-3 (only these due to sufficient numbers).
+
+```{r}
+#Edit as needed for each trend
+
+    eg <- bitr(trend_1_flat_up$Hippocampus, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Mm.eg.db")
+  
+    ego <- enrichGO(
+      gene = eg$ENTREZID,  
+      OrgDb = org.Mm.eg.db, 
+      ont = "BP", 
+      pAdjustMethod = "BH", 
+      pvalueCutoff = 0.05, 
+      qvalueCutoff = 0.05, 
+      readable = TRUE
+    )
+    assign("Hippocampus.trend1.ego", ego)
+    csv_filename <- "Hippocampus_EGO_trend1_reduced.csv"
+    write.csv(hippo_trend3_ego_result, file = csv_filename, row.names = FALSE)
+
+
+    
+hippo_trend3_ego_result<-Hippocampus.trend3.ego@result    
+  
+hippo_trend1_ego_result <- hippo_trend1_ego_result %>%
+        dplyr::filter(p.adjust < 0.05)      
+```
+###Trend GO heatmaps (trends 1-4)
+Top 3 terms by region per trend
+```{r}
+
+#Initialize
+brain_regions <- c("Cortex", "Hippocampus", "Hypothalamus", "Thalamus", "Striatum")
+trend_GO_filenames <- c("trend1flatup", "trend2flatdown", "trend3upflat", "trend4downflat")
+heatmap_trend_list <- list()
+top2degs <- list() # we will select 3 but use this variable name for easier code maintenance
+
+#initialize blank dataframe for the work below
+
+setwd("C:/Users/Spouse/Documents/Research/Xie/MouseDevelopment/fixed_data/thanksgiving")
+for (name in trend_GO_filenames){
+  name_for_GO_df <- paste0(name, "_GO")
+  blank_df <- c() #initialize blank object to insert data
+  
+for (region in brain_regions) {
+  setwd("C:/Users/Spouse/Documents/Research/Xie/MouseDevelopment/fixed_data/thanksgiving")
+  #file name for csv GO files, iterating by region for each trend
+  file_name <- paste0(region, "_", name, ".csv")
+  #load the csv file
+  working_data <- read.csv(file_name)
+  #Extract the data from the file into a useful format
+  #working_data <- get(working_name)
+  #Assign the data to a dataframe 
+  blank_df[[region]] <- working_data
+  # 
+  # # Subset the dataframe to include only rows whose rownames are in trend list
+  # df_subset <- df[df$gene %in% trend_8_up_down[[region]], ]
+  # 
+  # # Store the subsetted dataframe in the result list
+  # subset_trend_8_up_down[[region]] <- df_subset
+  # 
+  #   # Sort the dataframe by avg_log2FC in descending order and get the top 2
+  #   df_sorted <- df_subset[order(df_subset$avg_log2FC, decreasing = TRUE), ]
+  #   top2[[region]] <- head(df_sorted, 2)  # Get the top 2 rows with the highest avg_log2FC
+  #   
+  #   # Store the result in the top2degs list
+  #   top2degs[[region]] <- top2
+}
+  
+    #apply the proper file name to the object we've been working with
+    blank_df -> name_for_GO_df
+    #clear this object so it will be empty for the next trend
+    remove(blank_df) 
+}
+
+DoHeatmap(merge.obj, features = top2degs$gene)+
+  scale_fill_gradientn(colors = c("blue", "white", "red"))
+ggsave('./Figures/new_heatmap/gene_heatmap_top2_trend8.tiff', dpi =300, width = 7, height = 7, unit = 'in')
+```
