@@ -1,0 +1,1152 @@
+---
+title: "SpatialAnalysis"
+output: html_document
+date: "2024-08-07"
+---
+
+```{r}
+library(Seurat)
+library(rlang)
+library(ggplot2)
+library(harmony)
+library(RColorBrewer)
+library(tidyverse)
+library(patchwork)
+library(dplyr)
+library(tidyr)
+
+library(clusterProfiler)
+library(org.Mm.eg.db)
+library(enrichplot)
+library(ggplot2)
+library(ggvenn)
+library(ComplexUpset)
+```
+
+#Seurat object creation and preprocessing/processing was performed by Amanda
+
+#Read RDS Files/Filter by adjusted p.val/Remove VS from DEG analysis (too few spots)/split into up/downregulated and brain region
+```{r}
+setwd('C:/Users/benconacher/OneDrive - Virginia Tech/Xie Lab/Computational/AgedMice')
+merge.obj <- readRDS("C:/Users/Ben/OneDrive - Virginia Tech/Xie Lab/Computational/AgedMiceSpatial/annotatedMerge.obj.rds")
+merge.obj.marker <- readRDS("merge.obj.marker.rds")
+
+all_degs_aged <- readRDS('all_degs_aged.rds')
+all_degs_p21 <- readRDS('all_degs_p21.rds')
+
+final_DEGs_aged <- all_degs_aged %>% dplyr::filter(p_val_adj < 0.05, abs(avg_log2FC) > log2(1.5), pct.1 > 0.1, pct.2 > 0.1) 
+final_DEGs_p21 <- all_degs_p21 %>% dplyr::filter(p_val_adj < 0.05, abs(avg_log2FC) > log2(1.5), pct.1 > 0.1, pct.2 > 0.1) 
+
+#filter out early response genes
+early_response_genes <- c('Fos','Fosb','Fosl2','Junb','Arc','Npas4','Egr1','Egr2','Egr3','Nr4a1','Gadd45b')
+filtered_DEGs_aged <- final_DEGs_aged[!final_DEGs_aged$gene %in% early_response_genes, ]
+filtered_DEGs_p21 <- final_DEGs_p21[!final_DEGs_p21$gene %in% early_response_genes, ]
+
+#Remove ventricular system
+clusters_to_remove <- c('Ventricular System_adult_vs_aged')
+filtered_DEGs_aged <- filtered_DEGs_aged %>%
+  filter(!Cluster %in% clusters_to_remove)
+
+clusters_to_remove <- c('Ventricular System_adult_vs_P21')
+filtered_DEGs_p21 <- filtered_DEGs_p21 %>%
+  filter(!Cluster %in% clusters_to_remove)
+
+#Filter upregulated/downregulated
+upregulated_genes_aged <- filtered_DEGs_aged %>%
+  filter(avg_log2FC > 0)
+upregulated_genes_p21 <- filtered_DEGs_p21 %>%
+  filter(avg_log2FC > 0)
+
+# Subset for downregulated genes (log2FC < 0)
+downregulated_genes_aged <- filtered_DEGs_aged %>%
+  filter(avg_log2FC < 0)
+downregulated_genes_p21 <- filtered_DEGs_p21 %>%
+  filter(avg_log2FC < 0)
+
+#split into brain regions
+aged_byCluster_down <- split(downregulated_genes_aged$gene, downregulated_genes_aged$Cluster)
+p21_byCluster_down <- split(downregulated_genes_p21$gene, downregulated_genes_p21$Cluster)
+
+aged_byCluster_up <- split(upregulated_genes_aged$gene, upregulated_genes_aged$Cluster)
+p21_byCluster_up <- split(upregulated_genes_p21$gene, upregulated_genes_p21$Cluster)
+
+saveRDS(aged_byCluster_down,'fixed_aged_byCluster_down.rds')
+saveRDS(aged_byCluster_up,'fixed_aged_byCluster_up.rds')
+
+saveRDS(p21_byCluster_down,'fixed_p21_byCluster_down.rds')
+saveRDS(p21_byCluster_up,'fixed_p21_byCluster_up.rds')
+
+saveRDS(filtered_DEGs_aged,'fixed_filtered_DEGs_aged.rds')
+saveRDS(filtered_DEGs_p21,'fixed_filtered_DEGs_p21.rds')
+```
+
+
+#Data Cluster Analysis
+```{r}
+#determine best cluster resolution
+library(clustree)
+clustree(merge.obj)
+
+SpatialDimPlot(merge.obj, pt.size.factor = 5, alpha = 1, image.alpha = 0.5, group.by = "Spatial_snn_res.0.075", ncol = 2,label = F)
+ggsave('./Figures/SpatialDmPlot-res0.075.png')
+
+#Best resolution is 0.075
+
+merge.obj <- JoinLayers(merge.obj)
+
+SpatialDimPlot(correct, pt.size.factor = 5, alpha = 1, image.alpha = 0.5, ncol = 2,label = F)
+ggsave("./Figures/SpatialDmPlot-res075.jpg")
+
+DimPlot(merge.obj, reduction = "umap")
+ggsave('./Figures/DmPlot-final.jpg')
+
+
+
+```
+
+#FindTransferAnchors and TransferData; Used to get better clustering based on aged_2 clustering (best initial clusters)
+```{r}
+merge.obj <- readRDS('altered.merge.obj.rds')
+
+# Split merged Seurat object by sample
+seurat_list <- SplitObject(merge.obj, split.by = "orig.ident")
+
+#use aged_1 it as the reference
+reference <- seurat_list$aged_1
+
+# Find anchors between the reference and another sample
+anchors <- FindTransferAnchors(reference = reference, query = seurat_list$aged_2, 
+                               normalization.method = "LogNormalize",
+                               npcs = 10, dims = 1:10)  # or "LogNormalize" if not using SCTransform
+
+# Transfer cluster labels from reference to aged_2
+seurat_list$aged_2 <- TransferData(anchorset = anchors, reference = reference, 
+                                    query = seurat_list$aged_2, 
+                                    refdata = reference$Spatial_snn_res.0.075)  # Transferring cluster labels
+
+# Find anchors between the reference and another sample
+anchors2 <- FindTransferAnchors(reference = reference, query = seurat_list$adult_1, 
+                               normalization.method = "LogNormalize",
+                               npcs = 10, dims = 1:10)  # or "LogNormalize" if not using SCTransform
+
+# Transfer cluster labels from reference to adult_1
+seurat_list$adult_1<- TransferData(anchorset = anchors2, reference = reference, 
+                                    query = seurat_list$adult_1, 
+                                    refdata = reference$Spatial_snn_res.0.075)  # Transferring cluster labels
+
+# Find anchors between the reference and another sample
+anchors3 <- FindTransferAnchors(reference = reference, query = seurat_list$adult_2, 
+                               normalization.method = "LogNormalize",
+                               npcs = 10, dims = 1:10)  # or "LogNormalize" if not using SCTransform
+
+# Transfer cluster labels from reference to adult_2
+seurat_list$adult_2<- TransferData(anchorset = anchors3, reference = reference, 
+                                    query = seurat_list$adult_2, 
+                                    refdata = reference$Spatial_snn_res.0.075)  # Transferring cluster labels
+
+# Find anchors between the reference and another sample
+anchors4 <- FindTransferAnchors(reference = reference, query = seurat_list$mf_p21_rep1, 
+                               normalization.method = "LogNormalize",
+                               npcs = 10, dims = 1:10)  # or "LogNormalize" if not using SCTransform
+
+# Transfer cluster labels from reference to sample2
+seurat_list$mf_p21_rep1<- TransferData(anchorset = anchors4, reference = reference, 
+                                    query = seurat_list$mf_p21_rep1, 
+                                    refdata = reference$Spatial_snn_res.0.075)  # Transferring cluster labels
+
+# Find anchors between the reference and another sample
+anchors5 <- FindTransferAnchors(reference = reference, query = seurat_list$mf_p21_rep2, 
+                               normalization.method = "LogNormalize",
+                               npcs = 10, dims = 1:10)  # or "LogNormalize" if not using SCTransform
+
+# Transfer cluster labels from reference to sample2
+seurat_list$mf_p21_rep2<- TransferData(anchorset = anchors5, reference = reference, 
+                                    query = seurat_list$mf_p21_rep2, 
+                                    refdata = reference$Spatial_snn_res.0.075)  # Transferring cluster labels
+
+seurat_list$aged_1$predicted.id <- seurat_list$aged_1$Spatial_snn_res.0.075
+merge.obj
+# Merge the datasets back into one Seurat object
+corrected_merge.obj <- merge(seurat_list$aged_1, y = c(seurat_list$aged_2, seurat_list$adult_1, 
+                                                       seurat_list$adult_2, seurat_list$mf_p21_rep1, seurat_list$mf_p21_rep2))
+
+saveRDS(merge.obj,'correctCluster.merge.obj.rds')
+subset.obj <- subset(merge.obj, orig.ident %in% c('adult_1','aged_2'))
+SpatialDimPlot(subset.obj, pt.size.factor = 4.5, alpha = 1, image.alpha = 0.5, group.by = "Spatial_snn_res.0.075", ncol = 2,label = F)
+ggsave('./Figures/aged-SpatialDmPlot.jpg')
+saveRDS(corrected_merge.obj,'corrected2.merge.obj.rds')
+
+```
+
+
+#Quality Control
+```{r}
+SpatialFeaturePlot(merge.obj, features = "nCount_Spatial",ncol = 2,pt.size.factor = 730)
+ggsave('./Figures/spatialUMI2.jpg')
+
+SpatialFeaturePlot(merge.obj, features = 'Actb', keep.scale = 'feature',pt.size.factor = 730)
+ggsave('./Figures/Actb-FeaturePlot2.jpg')
+
+# Create a violin plot for three housekeeping genes
+VlnPlot(object = merge.obj, 
+        split.by = 'orig.ident',
+        features = c("Actb", "Top1", "B2m"), 
+        stack = TRUE,
+        flip = TRUE,
+        #slot = 'counts',
+        group.by = "Spatial_snn_res.0.075")
+ggsave('./Figures/QC-VlnPlot-Raw.jpg')
+
+#Supplemental Figures
+#nCount and nSpatial VlnPlot
+VlnPlot(object = merge.obj, 
+        group.by = 'orig.ident',
+        features = 'nFeature_Spatial',
+        pt.size = 0)
+ggsave('./Figures/Final/medianGenes.tiff')
+
+summary(merge.obj$nFeature_Spatial)
+
+VlnPlot(object = merge.obj, 
+        group.by = 'orig.ident',
+        features = 'nCount_Spatial',
+        pt.size = 0) +
+  ylim(0,100000)
+ggsave('./Figures/Final/medianUMI.tiff')
+
+summary(merge.obj$nCount_Spatial)
+
+#Number of spots for P21
+
+# Extract the counts matrix
+summary(merge.obj[["Spatial"]]@cells)
+
+p21_data <- load('Control.Rdata')
+summary(controls[['Spatial']]@scale.data)
+```
+
+
+#Aged_1 manual clustering
+```{r}
+# Access spatial coordinates from the Seurat object
+
+#aged_1 reassignment
+p1.df <- GetTissueCoordinates(corrected_merge.obj, image = 'aged_1')
+p1.df$cluster <- corrected_merge.obj$Spatial_snn_res.0.075[rownames(p1.df)]
+p1 <- p1.df %>%  ggplot(aes(x = x, y = y, color = cluster)) + geom_point()
+cortex1 <- CellSelector(p1)
+cortex2 <- CellSelector(p1)
+cortex3 <- CellSelector(p1)
+selected_cells <- c(cortex1, cortex2, cortex3)
+# Reassign selected cells to cluster 0
+merge.obj$Spatial_snn_res.0.075[selected_cells] <- "0"
+
+ex1 <- CellSelector(p1)
+ex2 <- CellSelector(p1)
+merge.obj$Spatial_snn_res.0.075[hyp_cells] <- "2"
+
+hyp1 <- CellSelector(p1)
+hyp2 <- CellSelector(p1)
+hyp3 <- CellSelector(p1)
+hyp4 <- CellSelector(p1)
+hyp5 <- CellSelector(p1)
+hyp6 <- CellSelector(p1)
+hyp7 <- CellSelector(p1)
+hyp8 <- CellSelector(p1)
+hyp_cells <- c(hyp1,hyp2,hyp3,hyp4,hyp5,hyp6,hyp7,hyp8)
+# Reassign selected cells to cluster 2
+merge.obj$Spatial_snn_res.0.075[hyp_cells] <- "2"
+
+thal1 <- CellSelector(p1)
+merge.obj$Spatial_snn_res.0.075[thal1] <- "3"
+
+hy1 <- CellSelector(p1)
+hy2 <- CellSelector(p1)
+hy3 <- CellSelector(p1)
+hy_cells <- c(hy1,hy2,hy3)
+merge.obj$Spatial_snn_res.0.075[hy_cells] <- "4"
+
+str1 <- CellSelector(p1)
+str2 <- CellSelector(p1)
+str3 <- CellSelector(p1)
+str4 <- CellSelector(p1)
+str5 <- CellSelector(p1)
+
+corrected_merge.obj$Spatial_snn_res.0.075[c(str1,str2,str3,str4,str5)] <- "4"
+
+hip1 <- CellSelector(p1)
+merge.obj$Spatial_snn_res.0.075[hip1] <- "1"
+
+
+# Identify all cells in cluster 4
+cluster_4_cells <- which(corrected_merge.obj$predicted.id == "4")
+
+# Assign these cells to cluster 2
+corrected_merge.obj$predicted.id[cluster_4_cells] <- "2"
+
+
+#EXAMPLE
+hy1 <- CellSelector(p1)
+hy2 <- CellSelector(p1)
+hy3 <- CellSelector(p1)
+hy_cells <- c(hy1,hy2,hy3)
+corrected_merge.obj$predicted.id[hy_cells] <- "4"
+
+
+
+
+```
+
+#Aged_2 manual clustering
+```{r}
+p1.df <- GetTissueCoordinates(merge.obj, image = 'aged_2')
+p1.df$cluster <- merge.obj$Spatial_snn_res.0.075[rownames(p1.df)]
+p1 <- p1.df %>%  ggplot(aes(x = x, y = y, color = cluster)) + geom_point()
+cortex1 <- CellSelector(p1)
+cortex2 <- CellSelector(p1)
+cortex3 <- CellSelector(p1)
+cortex4 <- CellSelector(p1)
+selected_cells <- c(cortex1, cortex2, cortex3,cortex4)
+# Reassign selected cells to cluster 0
+merge.obj$Spatial_snn_res.0.075[selected_cells] <- "0"
+
+hyp1 <- CellSelector(p1)
+hyp2 <- CellSelector(p1)
+hyp3 <- CellSelector(p1)
+hyp4 <- CellSelector(p1)
+hyp5 <- CellSelector(p1)
+hyp6 <- CellSelector(p1)
+hyp7 <- CellSelector(p1)
+hyp_cells <- c(hyp1,hyp2,hyp3,hyp4,hyp5,hyp6,hyp7)
+# Reassign selected cells to cluster 2
+merge.obj$Spatial_snn_res.0.075[hyp_cells] <- "2"
+
+thal1 <- CellSelector(p1)
+thal2 <- CellSelector(p1)
+thal3 <- CellSelector(p1)
+thal4 <- CellSelector(p1)
+thal5 <- CellSelector(p1)
+thal6 <- CellSelector(p1)
+thal7 <- CellSelector(p1)
+hyp_cells <- c(thal1,thal2,thal3,thal4,thal5,thal6,thal7)
+# Reassign selected cells to cluster 2
+merge.obj$Spatial_snn_res.0.075[hyp_cells] <- "3"
+
+vs1 <- CellSelector(p1)
+merge.obj$Spatial_snn_res.0.075[c(thal2,thal3,vs1)] <- "4"
+```
+
+#Adult_1 manual clustering
+```{r}
+p1.df <- GetTissueCoordinates(merge.obj, image = 'adult_1')
+p1.df$cluster <- merge.obj$Spatial_snn_res.0.075[rownames(p1.df)]
+p1 <- p1.df %>%  ggplot(aes(x = x, y = y, color = cluster)) + geom_point()
+str1 <- CellSelector(p1)
+str2 <- CellSelector(p1)
+str_cells <- c(str1,str2)
+merge.obj$Spatial_snn_res.0.075[str_cells] <- "5"
+
+
+cortex1 <- CellSelector(p1)
+cortex2 <- CellSelector(p1)
+cortex3 <- CellSelector(p1)
+cortex4 <- CellSelector(p1)
+selected_cells <- c(cortex1, cortex2, cortex3,cortex4)
+# Reassign selected cells to cluster 0
+merge.obj$Spatial_snn_res.0.075[selected_cells] <- "0"
+
+hyp1 <- CellSelector(p1)
+hyp2 <- CellSelector(p1)
+hyp3 <- CellSelector(p1)
+hyp4 <- CellSelector(p1)
+hyp5 <- CellSelector(p1)
+hyp6 <- CellSelector(p1)
+hyp7 <- CellSelector(p1)
+hyp_cells <- c(hyp1,hyp2,hyp3,hyp4,hyp5,hyp6,hyp7)
+# Reassign selected cells to cluster 2
+merge.obj$Spatial_snn_res.0.075[hyp_cells] <- "2"
+
+thal1 <- CellSelector(p1)
+thal2 <- CellSelector(p1)
+thal3 <- CellSelector(p1)
+thal4 <- CellSelector(p1)
+thal5 <- CellSelector(p1)
+thal6 <- CellSelector(p1)
+thal7 <- CellSelector(p1)
+hyp_cells <- c(thal1,thal2,thal3,thal4,thal5,thal6,thal7)
+# Reassign selected cells to cluster 2
+merge.obj$Spatial_snn_res.0.075[hyp_cells] <- "3"
+
+vs1 <- CellSelector(p1)
+merge.obj$Spatial_snn_res.0.075[vs1] <- "4"
+```
+
+
+#Adult_2 manual clustering
+```{r}
+p1.df <- GetTissueCoordinates(merge.obj, image = 'adult_2')
+p1.df$cluster <- merge.obj$Spatial_snn_res.0.075[rownames(p1.df)]
+p1 <- p1.df %>%  ggplot(aes(x = x, y = y, color = cluster)) + geom_point()
+cortex1 <- CellSelector(p1)
+cortex2 <- CellSelector(p1)
+cortex3 <- CellSelector(p1)
+cortex4 <- CellSelector(p1)
+selected_cells <- c(cortex1, cortex2, cortex3,cortex4)
+# Reassign selected cells to cluster 0
+merge.obj$Spatial_snn_res.0.075[selected_cells] <- "0"
+
+hyp1 <- CellSelector(p1)
+hyp2 <- CellSelector(p1)
+hyp3 <- CellSelector(p1)
+hyp4 <- CellSelector(p1)
+hyp5 <- CellSelector(p1)
+hyp6 <- CellSelector(p1)
+hyp7 <- CellSelector(p1)
+hyp_cells <- c(hyp1,hyp2,hyp3,hyp4,hyp5,hyp6,hyp7)
+# Reassign selected cells to cluster 2
+merge.obj$Spatial_snn_res.0.075[hyp_cells] <- "2"
+
+thal1 <- CellSelector(p1)
+thal2 <- CellSelector(p1)
+thal3 <- CellSelector(p1)
+thal4 <- CellSelector(p1)
+thal5 <- CellSelector(p1)
+thal6 <- CellSelector(p1)
+thal7 <- CellSelector(p1)
+hyp_cells <- c(thal1,thal2,thal3,thal4,thal5,thal6,thal7)
+# Reassign selected cells to cluster 2
+merge.obj$Spatial_snn_res.0.075[hyp_cells] <- "3"
+
+vs1 <- CellSelector(p1)
+merge.obj$Spatial_snn_res.0.075[vs1] <- "4"
+
+str1 <- CellSelector(p1)
+merge.obj$Spatial_snn_res.0.075[str1] <- "5"
+```
+# P21rep1&2 from Amanda; some additional manual clustering
+```{r}
+source.obj <- readRDS('cluster_adj_p21.rds')
+SpatialDimPlot(source.obj, pt.size.factor = 750, alpha = 1, image.alpha = 0.5, group.by = "Spatial_snn_res.0.075", ncol = 2,label = F)
+cluster_info <- source.obj$Spatial_snn_res.0.075
+samples_to_update <- merge.obj@meta.data$orig.ident %in% c('mf_p21_rep1', 'mf_p21_rep2')
+
+merge.obj@meta.data$Spatial_snn_res.0.075[samples_to_update] <- cluster_info[samples_to_update]
+SpatialDimPlot(merge.obj, pt.size.factor = 3, alpha = 1, image.alpha = 0.5, group.by = "Spatial_snn_res.0.075", ncol = 2,label = F)
+
+p1.df <- GetTissueCoordinates(merge.obj, image = 'mf_p21_rep1')
+p1.df$cluster <- merge.obj$Spatial_snn_res.0.075[rownames(p1.df)]
+p1 <- p1.df %>%  ggplot(aes(x = imagerow, y = imagecol, color = cluster)) + geom_point()
+cortex1 <- CellSelector(p1)
+cortex2 <- CellSelector(p1)
+cortex3 <- CellSelector(p1)
+cortex4 <- CellSelector(p1)
+selected_cells <- c(cortex1, cortex2, cortex3,cortex4)
+# Reassign selected cells to cluster 0
+merge.obj$Spatial_snn_res.0.075[selected_cells] <- "2"
+```
+#Cluster assignment
+```{r}
+#Change cluster # to brain region/
+merge.obj <- SetIdent(merge.obj, value = "Spatial_snn_res.0.075")
+table(Idents(merge.obj))
+new_cluster_names <- c("0" = "Cortex", "1" = "Hippocampus", "2" = "Hypothalamus", '3' = 'Thalamus', '4' = 'Ventricular System','5' = 'Striatum')
+merge.obj <- RenameIdents(merge.obj, new_cluster_names)
+
+#Change order to P21/Adult/Aged
+merge.obj$orig.ident <- factor(merge.obj$orig.ident, levels = c('mf_p21_rep1','mf_p21_rep2','adult_1','adult_2','aged_1','aged_2'))
+
+
+#Rename Idents
+new_names <- list("mf_p21_rep1" = "P21_1",
+               "mf_p21_rep2" = "P21_2", 
+               'adult_1' = 'adult_1',
+               'adult_2' = 'adult_2',
+               'aged_1' = 'aged_1',
+               'aged_2' = 'aged_2')
+merge.obj$orig.ident <- recode(merge.obj$orig.ident, !!!new_names)
+
+#change order of images
+merge.obj@images <- merge.obj@images[c('mf_p21_rep1','mf_p21_rep2','adult_1','adult_2','aged_1','aged_2')]
+new_image_names <- c("p21_1", "p21_2", "adult_1","adult_2",'aged_1','aged_2')
+names(merge.obj@images) <- new_image_names
+
+SpatialDimPlot(merge.obj, pt.size.factor = 3, alpha = 1, image.alpha = 0.5, group.by = "Spatial_snn_res.0.075", ncol = 2,label = F)
+saveRDS(merge.obj,'FinalannotatedMerge.obj.rds')
+```
+
+
+
+#Data analysis of cluster gene markers
+```{r}
+merge.obj <- JoinLayers(merge.obj)
+merge.obj.marker <- FindAllMarkers(merge.obj, only.pos = TRUE, min.pct = 0.5, logfc.threshold = 0.25)
+
+saveRDS(merge.obj.marker,'fixed-merge.obj.marker.rds')
+
+merge.obj.marker %>%
+    group_by(cluster) %>%
+    top_n(n = 5, wt = avg_log2FC) -> top5 #find top 5 markers from each cluster
+
+#Select genes of interest
+# interestGenes <- c("MOBP","MBP", "MOG","ERMN","PLP1", "PDYN","PCDH20", "CALB1", "FNDC1", "CCN3", "DUSP4", "NRGN", "SLC17A7","NEUROD6")
+# 
+# TOP5 <- subset(subset.obj.marker, gene %in% interestGenes)
+# 
+# #Sort based on interest order/ remove duplicates
+# TOP5$gene <- factor(TOP5$gene, levels = interestGenes)
+# TOP5 <- TOP5[order(TOP5$gene), ]
+# TOP5 <- TOP5[-14,]
+
+#Top Gene Markers Plot
+DoHeatmap(merge.obj, features = top5$gene)+
+  scale_fill_gradientn(colors = c("blue", "white", "red"))# + theme(axis.text.y = element_blank())
+
+ggsave('./Figures/Final/HtmapTop5.tiff', device='tiff')
+
+SpatialDimPlot(merge.obj)
+```
+
+#Subcluster Hippocampus
+```{r}
+merge.obj <- SetIdent(merge.obj, value = "Spatial_snn_res.0.075")
+
+hp_cluster <- subset(merge.obj, idents = 1)
+
+hp_cluster <- NormalizeData(hp_cluster, assay = "Spatial", scale.factor = 10**6) #Normalize remaining gene-count matrices using counts per million (CPM) method
+hp_cluster <- FindVariableFeatures(hp_cluster, assay = "Spatial", nfeatures = 3000) #This function identifies the 3,000 most variable genes across the cells in merge.obj
+hp_cluster <- ScaleData(hp_cluster, assay = "Spatial", features = rownames(hp_cluster))
+
+hp_cluster <- RunPCA(hp_cluster)
+
+ElbowPlot(hp_cluster,ndims = 30) + geom_hline(yintercept=3)+
+   scale_y_continuous(breaks = c(3,5,10,15))
+
+hp_cluster <- RunHarmony(hp_cluster,"orig.ident", dims.use = 1:10 ,assay.use = "Spatial") #Use Harmony method to eliminate merge.obj-related noise
+
+ElbowPlot(hp_cluster,ndims = 10,reduction = "harmony") + geom_hline(yintercept=3)+
+   scale_y_continuous(breaks = c(3,5,10,15))
+
+hp_cluster <- RunUMAP(hp_cluster, dims = 1:10,reduction = "harmony")
+
+DimPlot(hp_cluster)
+
+hp_cluster <- FindNeighbors(hp_cluster, reduction = "harmony", dims = 1:10)
+hp_cluster <- FindClusters(hp_cluster, resolution = 0.3) #perform multiple resolutions
+
+#determine best cluster resolution
+library(clustree)
+clustree(hp_cluster)
+
+SpatialDimPlot(hp_cluster, pt.size.factor = 6, alpha = 1, image.alpha = 0.5, group.by = "Spatial_snn_res.0.075", ncol = 2,label = F)
+
+saveRDS(hp_cluster, 'hp_seurat.obj.rds')
+```
+
+#Subcluster Hypothalamus
+```{r}
+hy_cluster <- subset(merge.obj, idents = 2)
+
+hy_cluster <- SetIdent(hy_cluster, value = "orig.ident")
+
+hy_cluster <- NormalizeData(hy_cluster, assay = "Spatial", scale.factor = 10**6) #Normalize remaining gene-count matrices using counts per million (CPM) method
+hy_cluster <- FindVariableFeatures(hy_cluster, assay = "Spatial", nfeatures = 3000) #This function identifies the 3,000 most variable genes across the cells in merge.obj
+hy_cluster <- ScaleData(hy_cluster, assay = "Spatial", features = rownames(hy_cluster))
+
+hy_cluster <- RunPCA(hy_cluster)
+
+ElbowPlot(hy_cluster,ndims = 30) + geom_hline(yintercept=3)+
+   scale_y_continuous(breaks = c(3,5,10,15))
+
+hy_cluster <- RunHarmony(hy_cluster,"orig.ident", dims.use = 1:10 ,assay.use = "Spatial") #Use Harmony method to eliminate merge.obj-related noise
+
+ElbowPlot(hy_cluster,ndims = 10,reduction = "harmony") + geom_hline(yintercept=3)+
+   scale_y_continuous(breaks = c(3,5,10,15))
+
+hy_cluster <- RunUMAP(hy_cluster, dims = 1:10,reduction = "harmony")
+
+DimPlot(hy_cluster)
+
+hy_cluster <- FindNeighbors(hy_cluster, reduction = "harmony", dims = 1:10)
+hy_cluster <- FindClusters(hy_cluster, resolution = 0.05) #perform multiple resolutions
+
+#determine best cluster resolution
+library(clustree)
+clustree(hy_cluster)
+
+SpatialDimPlot(hy_cluster, pt.size.factor = 6, alpha = 1, image.alpha = 0.5, group.by = "Spatial_snn_res.0.075", ncol = 2,label = F)
+
+```
+
+
+#Differential Gene Expression Analysis
+```{r}
+#Pool replicate samples together
+merge.obj$combined_groups <- ifelse(merge.obj$orig.ident %in% c("aged_1", "aged_2"), "aged",
+                                     ifelse(merge.obj$orig.ident %in% c("adult_1", "adult_2"), "adult",
+                                            ifelse(merge.obj$orig.ident %in% c("P21_1", "P21_2"), "P21",
+                                                   merge.obj$orig.ident)))
+
+deg_results <- list()  # To store the results for each cluster comparison
+
+merge.obj <- JoinLayers(merge.obj)
+
+# Loop through each spatial cluster
+for (cluster in unique(merge.obj@active.ident)) {
+  # Subset data to the current cluster
+  cluster_data <- subset(merge.obj, idents = cluster)
+  
+  # Set identities to combined groups for the current cluster
+  Idents(cluster_data) <- "combined_groups"
+  
+  # Check unique identities in this cluster
+  unique_idents <- unique(Idents(cluster_data))
+  print(paste("Cluster:", cluster, "Identities:", paste(unique_idents, collapse = ", ")))
+
+  # Ensure all pooled groups are present in the cluster
+  if (!all(c("adult", "aged", "P21") %in% unique_idents)) {
+    print(paste("Skipping cluster", cluster, "because one or more groups are missing."))
+    next
+  }
+
+  # Perform DEG between 'adult' and 'aged'
+  deg_adult_vs_aged <- FindMarkers(cluster_data, ident.1 = "aged", ident.2 = "adult", logfc.threshold = 0.25)
+  deg_results[[paste(cluster, "adult_vs_aged", sep = "_")]] <- deg_adult_vs_aged
+
+  # Perform DEG between 'adult' and 'P21'
+  deg_adult_vs_P21 <- FindMarkers(cluster_data, ident.1 = "P21", ident.2 = "adult", logfc.threshold = 0.25)
+  deg_results[[paste(cluster, "adult_vs_P21", sep = "_")]] <- deg_adult_vs_P21
+}
+
+saveRDS(deg_results,'fixed_deg_results.rds')
+deg_results <- readRDS('deg_results.rds')
+
+#Convert list to single data frame
+all_degs <- bind_rows(deg_results, .id = "Cluster")
+
+newRownames <- c(rownames(deg_results$Hypothalamus_adult_vs_aged),rownames(deg_results$Hypothalamus_adult_vs_P21),rownames(deg_results$Thalamus_adult_vs_aged),rownames(deg_results$Thalamus_adult_vs_P21),rownames(deg_results$Striatum_adult_vs_aged),rownames(deg_results$Striatum_adult_vs_P21),rownames(deg_results$Cortex_adult_vs_aged),rownames(deg_results$Cortex_adult_vs_P21),rownames(deg_results$Hippocampus_adult_vs_aged),rownames(deg_results$Hippocampus_adult_vs_P21),rownames(deg_results$`Ventricular System_adult_vs_aged`),rownames(deg_results$`Ventricular System_adult_vs_P21`))
+
+all_degs$gene <- newRownames #add gene column from rownames data
+saveRDS(all_degs,'fixed_all_degs.rds')
+all_degs <- readRDS('all_degs.rds')
+
+
+SpatialFeaturePlot(merge.obj, features = 'Gfap', keep.scale = 'feature')
+ggsave('./Figures/Slc17a7FeaturePlot.jpg')
+
+#Separate Aged and P21 groups
+all_DEGs_aged <- all_degs[grep("aged$",all_degs$Cluster),]
+
+all_DEGs_p21 <- all_degs[grep("P21$",all_degs$Cluster),]
+
+saveRDS(all_DEGs_aged,'fixed_all_degs_aged.rds')
+saveRDS(all_DEGs_p21,'fixed_all_degs_p21.rds')
+
+#Filter DEGs
+final_DEGs_p21 <- all_DEGs_p21 %>% dplyr::filter(p_val_adj < 0.05, abs(avg_log2FC) > log2(1.5), pct.1 > 0.1, pct.2 > 0.1) 
+saveRDS(final_DEGs_aged,file = "fixed_final_DEGs_aged.rds")
+final_DEGs_p21 <- readRDS('fixed_final_DEGs_p21.rds')
+
+#Add new column 'cluster' for jjVolcano
+final_DEGs_aged$cluster <- final_DEGs_aged$Cluster
+#Change Cluster Names
+final_DEGs_aged$cluster <- gsub("Hypothalamus_adult_vs_aged", "HY", final_DEGs_aged$cluster)
+final_DEGs_aged$cluster <- gsub("Thalamus_adult_vs_aged", "TH", final_DEGs_aged$cluster)
+final_DEGs_aged$cluster <- gsub("Striatum_adult_vs_aged", "STR", final_DEGs_aged$cluster)
+final_DEGs_aged$cluster <- gsub("Cortex_adult_vs_aged", "CTX", final_DEGs_aged$cluster)
+final_DEGs_aged$cluster <- gsub("Hippocampus_adult_vs_aged", "HP", final_DEGs_aged$cluster)
+final_DEGs_aged$cluster <- gsub("Ventricular System_adult_vs_aged", "VS", final_DEGs_aged$cluster)
+
+final_DEGs_p21$cluster <- final_DEGs_p21$Cluster
+#Change Cluster Names
+final_DEGs_p21$cluster <- gsub("Hypothalamus_adult_vs_P21", "HY", final_DEGs_p21$cluster)
+final_DEGs_p21$cluster <- gsub("Thalamus_adult_vs_P21", "TH", final_DEGs_p21$cluster)
+final_DEGs_p21$cluster <- gsub("Striatum_adult_vs_P21", "STR", final_DEGs_p21$cluster)
+final_DEGs_p21$cluster <- gsub("Cortex_adult_vs_P21", "CTX", final_DEGs_p21$cluster)
+final_DEGs_p21$cluster <- gsub("Hippocampus_adult_vs_P21", "HP", final_DEGs_p21$cluster)
+final_DEGs_p21$cluster <- gsub("Ventricular System_adult_vs_P21", "VS", final_DEGs_p21$cluster)
+
+```
+
+#Aging Cell Spatial Paper (compare results)
+```{r}
+#Total number of DEGs
+tot_DEGs_1.1 <- unique(final_DEGs_aged_2$gene)
+
+
+```
+
+
+#Common/Trending Up/Trending Down DEGs by Cluster
+```{r}
+cluster_list = c("Cortex", "Hippocampus", "Thalamus", "Hypothalamus", "Striatum")
+direction_list = c("up", "down")
+
+# Loops through clusters and directions
+for (br in cluster_list) {
+  for (direction in direction_list) {
+    # Create variable names dynamically
+    aged_vs_p21_name <- paste0(br, "_Aged_P21_", direction)
+    common_aged_name <- paste0(br, "_common_", direction, "_aged")
+    common_p21_name <- paste0(br, "_common_", direction, "_p21")
+    
+    # Common genes between aged and P21 for current cluster and direction
+    aged_vs_p21 <- intersect(get(paste0("aged_byCluster_", direction))[[paste0(br, "_adult_vs_aged")]],
+                             get(paste0("p21_byCluster_", direction))[[paste0(br, "_adult_vs_P21")]])
+    
+    # Subset of common genes from the aged DEG file
+    common_aged <- filtered_DEGs_aged[filtered_DEGs_aged$gene %in% aged_vs_p21 & 
+                                      filtered_DEGs_aged$Cluster == paste0(br, "_adult_vs_aged"), ]
+    
+    # Subset of common genes for P21, ensuring Cluster matches br_adult_vs_P21
+    common_p21 <- filtered_DEGs_p21[filtered_DEGs_p21$gene %in% aged_vs_p21 & 
+                                    filtered_DEGs_p21$Cluster == paste0(br, "_adult_vs_P21"), ]
+    # Note that these subsets should be identical  - doing both is a quality control check 
+    
+    # Assign the created objects with dynamic names
+    assign(aged_vs_p21_name, aged_vs_p21)
+    assign(common_aged_name, common_aged)
+    assign(common_p21_name, common_p21)
+
+    # Save common_aged as a CSV file
+    csv_filename <- paste0(br, "_common_", direction, ".csv")
+    write.csv(common_aged, file = csv_filename, row.names = FALSE)
+    
+    }
+}
+
+
+#Trending Down
+cluster_list = c("Cortex", "Hippocampus", "Thalamus", "Hypothalamus", "Striatum")
+
+
+for (br in cluster_list) {
+  
+  # Define variable names
+  p21_vs_aged_name <- paste0(br, "_P21_Aged_up_down")
+  common_p21_name <- paste0(br, "_common_p21")
+  common_aged_name <- paste0(br, "_common_aged")
+  
+  # Retrieve upregulated and downregulated gene lists
+  p21_up_genes <- get("p21_byCluster_up")[[paste0(br, "_adult_vs_P21")]]
+  aged_down_genes <- get("aged_byCluster_down")[[paste0(br, "_adult_vs_aged")]]
+  
+  # Find intersection
+  p21_vs_aged <- intersect(p21_up_genes, aged_down_genes)
+  message("Number of intersected genes for ", br, ": ", length(p21_vs_aged))
+  
+  # Subset of common genes in P21
+  common_p21 <- filtered_DEGs_p21[filtered_DEGs_p21$gene %in% p21_vs_aged & 
+                                  filtered_DEGs_p21$Cluster == paste0(br, "_adult_vs_P21"), ]
+  
+  # Subset of common genes in aged
+  common_aged <- filtered_DEGs_aged[filtered_DEGs_aged$gene %in% p21_vs_aged & 
+                                    filtered_DEGs_aged$Cluster == paste0(br, "_adult_vs_aged"), ]
+  
+  # Assign and save CSV if not empty
+  assign(p21_vs_aged_name, p21_vs_aged)
+  assign(common_p21_name, common_p21)
+  assign(common_aged_name, common_aged)
+
+  if (nrow(common_aged) > 0) {
+    csv_filename <- paste0(br, "_trend_down_aged.csv")
+    write.csv(common_aged, file = csv_filename, row.names = FALSE)
+    message("CSV file saved for ", br, ": ", csv_filename)
+  } else {
+    message("No genes found for ", br, " after Cluster filtering.")
+  }
+}
+
+
+#Trending Up
+for (br in cluster_list) {
+  
+  # Define variable names
+  p21_vs_aged_name <- paste0(br, "_Aged_P21_up_down")
+  common_p21_name <- paste0(br, "_common_p21")
+  common_aged_name <- paste0(br, "_common_aged")
+  
+  # Retrieve upregulated and downregulated gene lists
+  aged_up_genes <- get("aged_byCluster_up")[[paste0(br, "_adult_vs_aged")]] # Changed to get upregulated genes in aged
+  p21_down_genes <- get("p21_byCluster_down")[[paste0(br, "_adult_vs_P21")]] # Changed to get downregulated genes in P21
+  
+  # Find intersection
+  aged_vs_p21 <- intersect(aged_up_genes, p21_down_genes)
+  message("Number of intersected genes for ", br, ": ", length(aged_vs_p21))
+  
+  # Subset of common genes in aged
+  common_aged <- filtered_DEGs_aged[filtered_DEGs_aged$gene %in% aged_vs_p21 & 
+                                    filtered_DEGs_aged$Cluster == paste0(br, "_adult_vs_aged"), ]
+  
+  # Subset of common genes in P21
+  common_p21 <- filtered_DEGs_p21[filtered_DEGs_p21$gene %in% aged_vs_p21 & 
+                                  filtered_DEGs_p21$Cluster == paste0(br, "_adult_vs_P21"), ]
+  
+  # Assign and save CSV if not empty
+  assign(p21_vs_aged_name, aged_vs_p21)
+  assign(common_p21_name, common_p21)
+  assign(common_aged_name, common_aged)
+
+  if (nrow(common_aged) > 0) {
+    csv_filename <- paste0(br, "_trend_up_aged.csv")
+    write.csv(common_aged, file = csv_filename, row.names = FALSE)
+    message("CSV file saved for ", br, ": ", csv_filename)
+  } else {
+    message("No genes found for ", br, " after Cluster filtering.")
+  }
+}
+```
+
+#GO ClusterProfiler
+```{r}
+
+for (br in cluster_list) {
+  for (direction in direction_list) {
+    # Create variable names dynamically
+    common_name <- paste0(br, "_Aged_P21_", direction)
+    print(paste0("Working on ", common_name))
+    
+    #The following step is necessary to avoid warning "No gene can be mapped"
+    get_common_name <- get(common_name)
+    
+    ego <- enrichGO(
+      gene = get_common_name,  
+      OrgDb = org.Mm.eg.db, 
+      keyType = "SYMBOL", 
+      ont = "BP", 
+      pAdjustMethod = "BH", 
+      pvalueCutoff = 0.05, 
+      qvalueCutoff = 0.05, 
+      readable = TRUE
+    )
+    csv_filename <- paste0('./EGO/',br, "_EGO_", direction, ".csv")
+    write.csv(ego, file = csv_filename, row.names = FALSE)
+
+  }
+}
+
+
+#Trending down
+# Up in P21, Down in Aged
+for (br in cluster_list) {
+  # Define variable names
+  p21_vs_aged_name <- paste0(br, "_P21_Aged_up_down")
+  common_p21_name <- paste0(br, "_common_p21")
+  common_aged_name <- paste0(br, "_common_aged")
+  
+  # Retrieve upregulated genes in P21 and downregulated genes in aged
+  p21_up_genes <- get("p21_byCluster_up")[[paste0(br, "_adult_vs_P21")]]  # Upregulated genes in P21
+  aged_down_genes <- get("aged_byCluster_down")[[paste0(br, "_adult_vs_aged")]]  # Downregulated genes in aged
+  
+  # Find intersection: upregulated in P21 and downregulated in aged
+  p21_vs_aged <- intersect(p21_up_genes, aged_down_genes)
+  message("Number of intersected genes for ", br, ": ", length(p21_vs_aged))
+  
+  # Subset of common genes in aged
+  common_aged <- filtered_DEGs_aged[filtered_DEGs_aged$gene %in% p21_vs_aged & 
+                                     filtered_DEGs_aged$Cluster == paste0(br, "_adult_vs_aged"), ]
+  
+  # Subset of common genes in P21
+  common_p21 <- filtered_DEGs_p21[filtered_DEGs_p21$gene %in% p21_vs_aged & 
+                                   filtered_DEGs_p21$Cluster == paste0(br, "_adult_vs_P21"), ]
+  
+  # Assign and save CSV if not empty
+  assign(p21_vs_aged_name, p21_vs_aged)
+  assign(common_p21_name, common_p21)
+  assign(common_aged_name, common_aged)
+
+  if (nrow(common_aged) > 0) {
+    # Perform GO enrichment analysis on the intersected genes
+    ego <- enrichGO(
+      gene = p21_vs_aged,  
+      OrgDb = org.Mm.eg.db, 
+      keyType = "SYMBOL", 
+      ont = "BP", 
+      pAdjustMethod = "BH", 
+      pvalueCutoff = 0.05, 
+      qvalueCutoff = 0.05, 
+      readable = TRUE
+    )
+    
+    # Save the results to a CSV file
+    csv_filename <- paste0('./EGO/', br, "_EGO_P21_Aged_up_down.csv")
+    write.csv(ego, file = csv_filename, row.names = FALSE)
+    message("CSV file saved for ", br, ": ", csv_filename)
+  } else {
+    message("No genes found for ", br, " after Cluster filtering.")
+  }
+}
+
+
+#trending up
+# Downregulated in P21, Up in Aged
+for (br in cluster_list) {
+  # Define variable names
+  p21_vs_aged_name <- paste0(br, "_P21_Aged_down_up")
+  common_p21_name <- paste0(br, "_common_p21")
+  common_aged_name <- paste0(br, "_common_aged")
+  
+  # Retrieve downregulated genes in P21 and upregulated genes in aged
+  p21_down_genes <- get("p21_byCluster_down")[[paste0(br, "_adult_vs_P21")]]  # Downregulated genes in P21
+  aged_up_genes <- get("aged_byCluster_up")[[paste0(br, "_adult_vs_aged")]]  # Upregulated genes in aged
+  
+  # Find intersection: downregulated in P21 and upregulated in aged
+  p21_vs_aged <- intersect(p21_down_genes, aged_up_genes)
+  message("Number of intersected genes for ", br, ": ", length(p21_vs_aged))
+  
+  # Subset of common genes in aged
+  common_aged <- filtered_DEGs_aged[filtered_DEGs_aged$gene %in% p21_vs_aged & 
+                                     filtered_DEGs_aged$Cluster == paste0(br, "_adult_vs_aged"), ]
+  
+  # Subset of common genes in P21
+  common_p21 <- filtered_DEGs_p21[filtered_DEGs_p21$gene %in% p21_vs_aged & 
+                                   filtered_DEGs_p21$Cluster == paste0(br, "_adult_vs_P21"), ]
+  
+  # Assign and save CSV if not empty
+  assign(p21_vs_aged_name, p21_vs_aged)
+  assign(common_p21_name, common_p21)
+  assign(common_aged_name, common_aged)
+
+  if (nrow(common_aged) > 0) {
+    # Perform GO enrichment analysis on the intersected genes
+    ego <- enrichGO(
+      gene = p21_vs_aged,  
+      OrgDb = org.Mm.eg.db, 
+      keyType = "SYMBOL", 
+      ont = "BP", 
+      pAdjustMethod = "BH", 
+      pvalueCutoff = 0.05, 
+      qvalueCutoff = 0.05, 
+      readable = TRUE
+    )
+    
+    # Save the results to a CSV file
+    csv_filename <- paste0('./EGO/', br, "_EGO_P21_Aged_down_up.csv")
+    write.csv(ego, file = csv_filename, row.names = FALSE)
+    message("CSV file saved for ", br, ": ", csv_filename)
+  } else {
+    message("No genes found for ", br, " after Cluster filtering.")
+  }
+}
+```
+
+
+
+#Spatial Feature Plot DEGs
+```{r}
+all_degs_aged <- readRDS('all_degs_aged.rds')
+final_DEGs_aged <- all_degs_aged %>% dplyr::filter(p_val_adj < 0.05, abs(avg_log2FC) > log2(1.5), pct.1 > 0.1, pct.2 > 0.1) 
+
+# Subset the Seurat object to keep only the desired cells
+merge.obj2 <- subset(merge.obj, cells = cells_to_keep)
+
+#Start of Spatial Feature Plot
+color_scale <- scale_fill_gradientn(
+  limits = c(6000, 90000),  # Set the limits to cover the full range of your data
+  colours = rev(RColorBrewer::brewer.pal(n = 11, name = "Spectral"))  # Use a color palette
+ # Define the breaks for the legend
+)
+
+# Define the pt.size.factor values for each group of samples
+pt_size_factors <- c(730, 730, 3.5, 3.5, 5, 5)
+
+# Get the names of the images
+ident_values <- names(merge.obj@images)
+
+# Create the plots with the specified pt.size.factor values
+plots <- lapply(seq_along(ident_values), function(i) {
+  SpatialDimPlot(merge.obj, images = ident_values[i], pt.size.factor = pt_size_factors[i]) 
+   #color_scale + 
+  #  theme(legend.position = "none")  # Remove individual legends
+})
+
+# Create a dummy plot to extract the legend
+legend_plot <- SpatialFeaturePlot(merge.obj, features = "nCount_Spatial", images = ident_values[1]) + color_scale
+
+# Extract the legend
+legend <- cowplot::get_legend(legend_plot)
+
+# Combine the plots and add the common legend
+combined_plot <- patchwork::wrap_plots(plots, nrow = 1) + 
+  plot_layout(guides = "collect") & 
+  theme(legend.position = "bottom")
+
+# Add the legend to the combined plot
+final_plot <- cowplot::plot_grid(combined_plot, legend, ncol = 1, rel_heights = c(1, 0.1))
+
+# Print the final plot
+print(final_plot)
+
+SpatialFeaturePlot(merge.obj, features = 'nCount_Spatial', keep.scale = 'feature',max.cutoff = 'q95',pt.size.factor = 4)
+ggsave('./Figures/Final/SpatialDmPlot.tiff')
+
+
+
+
+#Top DEGs
+final_DEGs_aged %>%
+    group_by(Cluster) %>%
+    top_n(n = 5, wt = avg_log2FC) -> top5deg
+
+DoHeatmap(merge.obj, features = top5deg$gene)+
+  scale_fill_gradientn(colors = c("blue", "white", "red"))
+```
+
+
+#Upregulated/Downregulated jjVolcano Plot
+```{r}
+#install.packages("devtools")
+#devtools::install_github('junjunlab/scRNAtoolVis')
+
+library(scRNAtoolVis)
+
+#jjVolcano requires 'cluster' column not 'Cluster'
+
+#Set max and min to +-3
+final_DEGs$avg_log2FC[which(final_DEGs$avg_log2FC >= 3 )] <- 3 
+final_DEGs$avg_log2FC[which(final_DEGs$avg_log2FC <= -3 )] <- -3 
+
+
+#jjVolcano plot
+
+final_DEGs_aged$cluster <- factor(final_DEGs_aged$cluster, levels=c('CTX','HP','HY','TH','STR','VS'))
+jjVolcano(diffData = final_DEGs_aged,
+          log2FC.cutoff = log(1.5,2),
+          adjustP.cutoff = 0.05,
+          topGeneN = 0,
+          tile.col = c("#F8766D","#B79F00","#00BA38","#00BFC4",'purple','orange'),
+          base_size  = 18,
+          legend.position = "none",
+          pSize = 1.5,
+          celltypeSize = 7
+          ) +
+   xlab("") +
+   ylab("Average log2FoldChange") 
+
+ggsave("./Figures/Final/jjVolcano-1.5FC-aged.tiff")
+
+```
+
+
+#Violin Plot of Cluster Annotation
+```{r}
+library(scRNAtoolVis)
+
+#Remove Ventricular System Cluster
+cells_to_keep <- WhichCells(merge.obj, idents = setdiff(levels(Idents(merge.obj)), 'Ventricular System'))
+merge.obj2 <- subset(merge.obj, cells = cells_to_keep)
+
+#Cluster Markers
+VlnPlot(merge.obj, 
+        features = c('Gm11549',
+                     'Fibcd1',
+                     'Dlk1',
+                     'Shox2',
+                     'Pou4f1',
+                     'Drd2'),
+        stack = TRUE,
+        flip = TRUE,
+        cols = c("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2","grey","yellow")) +
+  theme(
+      axis.text = element_text(size = 20),  
+      axis.title = element_text(size = 20),
+      axis.text.y = element_text(size = 12),
+      strip.text = element_text(size = 20),
+      legend.position = "none"
+  )
+
+ggsave("./Figures/VlnPlot-ClusterMarkers.tiff", bg = 'white')
+
+#Plot of gene expression per cluster
+VlnPlot(merge.obj, 
+        features = c('Slc17a7',
+                     "Egr1",
+                     "Rgs14",
+                     "Grin2b",
+                     "Dsp",
+                      "Calb1", 
+                     "Neurod6",
+                     "Prox1"),
+        stack = TRUE,
+        flip = TRUE,
+        cols = c("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2","grey","yellow"))
+ggsave("./AgingvsTBI/Figures/VlnPlotres075.jpg")
+
+#By Sample - Egr1-related genes (likely stress response)
+VlnPlot(merge.obj, 
+        split.by = "orig.ident",
+        features = c('Actb',
+                     'Egr1',
+                     'Fos',
+                     'Arc',
+                     'Bdnf',
+                     'Nr4a1',
+                     'Junb',
+                     'Sirt2',
+                     'Erbb3',
+                     'Sox4',
+                     'Sox8',
+                     'Sox10'),
+        stack = TRUE,
+        flip = TRUE,
+        cols = c("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2","grey","yellow"))
+ggsave("./Figures/VlnPlot-Egr1Stress.tiff", width = 12)
+
+#Genes related to neuro/gliogenesis
+VlnPlot(merge.obj, 
+        split.by = "orig.ident",
+        features = c('Slc17a7',
+                     'Gad2',
+                     'Neurod6',
+                     'Gfap',
+                     'Olig2',
+                     'Mbp',
+                     'Mog',
+                     'Opalin'),
+        stack = TRUE,
+        flip = TRUE,
+        cols = c("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2","grey","yellow"))
+
+ggsave("./Figures/VlnPlot-neurons.tiff", width = 12)
+
+ggsave("./AgingvsTBI/Figures/interestGenes-VesselStability.jpg")
+```
+
+
+
+
+```{r}
+#Revigo GO Analysis Figure
+
+library(readr)
+
+revCTX <- read_tsv('./GO/Revigo_BP_SimilarityMatrix-CTX.tsv')
+revCA4 <- read_tsv('./GO/Revigo_BP_CA4.tsv')
+revDG <- read_tsv('./GO/Revigo_BP_DG.tsv')
+revMatrix <- read_tsv('./GO/Revigo_BP_Matrix.tsv')
+
+revCA13$Region <- 'CA1-3'
+revCA4$Region <- 'CA4'
+revDG$Region <- 'DG'
+revMatrix$Region <- 'Matrix'
+
+combined_rev <- bind_rows(revCA13,revCA4, revDG, revMatrix)
+
+signif_rev <- combined_rev %>%
+  group_by(Region) %>%
+  top_n(-10, wt = Value)
+
+ggplot(signif_rev, aes(x = -Value, 
+                           y = reorder(Name, -Value), 
+                           color = Region)) +
+  geom_point(aes(size = LogSize)) +
+  theme_minimal() +
+  labs(x = "Revigo Value", 
+       y = "GO Term", 
+       title = "TDP vs AD DEG GO Terms (Revigo) by Brain Region") +
+  theme(legend.position = "top") +
+  scale_color_brewer(palette = "Set1")
+
+ggsave("./Figures/TBI_go_terms-revigo.png", width = 10, dpi = 600, bg = 'white')
+
+```
+
